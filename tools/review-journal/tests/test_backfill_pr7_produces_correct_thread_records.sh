@@ -15,8 +15,7 @@ mkdir -p "$journal_dir"
 "$EXTRACT_PR" 7 \
   --repo loganrooks/tap-n-filter \
   --threads-from "$TESTS_DIR/fixtures/pr7-threads.raw.json" \
-  --journal-dir "$journal_dir" \
-  --accept-inferred >/dev/null 2>&1
+  --journal-dir "$journal_dir" >/dev/null 2>&1
 ec=$?
 assert_exit_code 0 "$ec" "extract exit code"
 
@@ -53,8 +52,7 @@ set +e
 "$EXTRACT_PR" 7 \
   --repo loganrooks/tap-n-filter \
   --threads-from "$TESTS_DIR/fixtures/pr7-threads.raw.json" \
-  --journal-dir "$journal_dir" \
-  --accept-inferred >/dev/null 2>&1
+  --journal-dir "$journal_dir" >/dev/null 2>&1
 second_extract_ec=$?
 set -e
 assert_exit_code 0 "$second_extract_ec" "second extract preserving manual entry"

@@ -21,7 +21,8 @@ cat > "$TEST_WORKDIR/good.json" <<'EOF'
       "resolved": true,
       "verdict": "ACCEPTED", "verdict_commit": "abc1234",
       "verdict_notes": null, "verdict_source": "block",
-      "reconsidered_verdict": null
+      "reconsidered_verdict": null,
+      "outdated": false, "verdict_refs": [], "verdict_history": [], "extras": {}
     }
   ]
 }

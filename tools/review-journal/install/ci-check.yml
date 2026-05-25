@@ -69,6 +69,12 @@ jobs:
             cat /tmp/review-journal.stderr
             printf '\n```\n'
           } > /tmp/review-journal.comment.md
+          # The workflow is documented as warning-mode; a failure to post the
+          # advisory comment (transient API error, fork-PR with restricted
+          # write permissions) must not turn a non-blocking advisory into a
+          # blocking CI failure. Codex flagged this on the original ci-check.yml
+          # at line 74 in PR #18 of the consumer (montage_cli).
           gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
-            --body-file /tmp/review-journal.comment.md
+            --body-file /tmp/review-journal.comment.md \
+            || echo "warning: failed to post review-journal advisory comment (continuing; warning mode does not block CI)"

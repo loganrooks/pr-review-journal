@@ -320,15 +320,12 @@ Exit codes:
 
 ### `extract-pr.sh <PR_NUMBER>`
 
-Same arguments as `sync-pr.sh`, plus:
-
-```
---accept-inferred            Reserved — see "Inferred → manual" below.
-```
-
-Writes the same `pr-N.json` plus a `pr-N-backfill.md` triage document listing
-threads where the verdict was inferred. Each entry has a `- [ ]` checkbox for
-the maintainer to confirm.
+Same arguments as `sync-pr.sh`. Writes the same `pr-N.json` plus a
+`pr-N-backfill.md` triage document listing threads where the verdict was
+inferred. Each entry has a `- [ ]` checkbox for the maintainer to confirm.
+To promote an inferred entry, hand-edit the corresponding entry in the
+journal JSON to set `verdict_source: "manual"`; manual entries are preserved
+across re-syncs.
 
 ### `review_journal.py parse-block`
 

@@ -36,8 +36,7 @@ mkdir -p "$journal_dir"
 "$EXTRACT_PR" 1 \
   --repo test/repo \
   --threads-from "$TEST_WORKDIR/threads.json" \
-  --journal-dir "$journal_dir" \
-  --accept-inferred >/dev/null 2>&1
+  --journal-dir "$journal_dir" >/dev/null 2>&1
 ec=$?
 assert_exit_code 0 "$ec" "extract exit code"
 

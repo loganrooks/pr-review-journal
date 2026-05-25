@@ -26,7 +26,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # Schema version for the journal JSON files. Bumped when the on-disk shape
 # changes incompatibly. Minor bumps for additive fields with safe defaults;
@@ -199,10 +199,29 @@ def parse_first_block(body: str) -> VerdictBlock:
     return validate_block(parse_block_body(inner), fence)
 
 
-def parse_all_blocks(body: str) -> list[VerdictBlock]:
+def parse_all_blocks(
+    body: str,
+    on_error: Callable[["BlockValidationError"], None] | None = None,
+) -> list[VerdictBlock]:
+    """Parse all verdict blocks in a comment body, skipping malformed ones.
+
+    A single malformed block (e.g., an example with placeholder values) MUST
+    NOT drop the valid blocks alongside it. Per-block try/except keeps the
+    valid verdicts; malformed blocks invoke `on_error` (if given) and are
+    skipped.
+
+    Fixes the bug Codex flagged on PR #18 (review_journal.py:206 in the
+    upstream layout): one malformed example block was dropping the entire
+    reply's verdicts, producing false BACKFILL/RESOLVE NEEDED.
+    """
     out = []
     for fence, inner in find_blocks(body):
-        out.append(validate_block(parse_block_body(inner), fence))
+        try:
+            out.append(validate_block(parse_block_body(inner), fence))
+        except BlockValidationError as e:
+            if on_error is not None:
+                on_error(e)
+            continue
     return out
 
 
@@ -879,22 +898,22 @@ def apply_inferred_to_record(rec: ThreadRecord, block: VerdictBlock) -> None:
 def extract_blocks_from_thread(thread: dict[str, Any]) -> tuple[VerdictBlock | None, VerdictBlock | None]:
     """Return (primary, reconsidered) blocks parsed from any reply on the thread.
 
-    A malformed block in one reply must NOT crash the whole sync. We emit a
-    stderr warning naming the thread and skip just that reply; other replies
-    and other threads continue to be processed normally.
+    Malformed blocks emit a stderr warning naming the thread + comment, then
+    are skipped — but any valid blocks in the same reply are still returned
+    (per Codex finding on PR #18: a malformed example block must NOT drop
+    valid sibling verdicts).
     """
     primary: VerdictBlock | None = None
     reconsidered: VerdictBlock | None = None
     for c in thread["comments"]["nodes"][1:]:
         body = c.get("body") or ""
-        try:
-            blocks = parse_all_blocks(body)
-        except BlockValidationError as e:
+        errors: list[BlockValidationError] = []
+        blocks = parse_all_blocks(body, on_error=errors.append)
+        for e in errors:
             sys.stderr.write(
                 f"warning: malformed review-verdict block on thread "
                 f"{thread.get('id', '?')} (comment {c.get('id', '?')}): {e}\n"
             )
-            continue
         for block in blocks:
             if block.kind == "reconsidered":
                 reconsidered = block
@@ -1048,9 +1067,10 @@ def write_backfill_md(out_path: Path, pr_number: int, repo: str, inferred: list[
     lines.append(f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}.")
     lines.append("")
     lines.append(
-        "Each thread below has an inferred verdict. Confirm by checking the box "
-        "and either re-running `extract-pr.sh <N> --accept-inferred` to flip the "
-        "source to `manual`, or by hand-editing the journal JSON.")
+        "Each thread below has an inferred verdict. Confirm by checking the box, "
+        "then hand-edit the corresponding entry in the journal JSON to set "
+        "`verdict_source: \"manual\"` (and adjust `verdict_notes` if you want). "
+        "Manual entries are preserved across re-syncs.")
     lines.append("")
     if not inferred:
         lines.append("_No threads required inference. The journal is complete._")
@@ -1113,6 +1133,13 @@ REQUIRED_THREAD_FIELDS = {
     "id", "path", "line", "reviewer", "reviewer_kind", "severity", "category",
     "finding_excerpt", "created_at", "resolved", "verdict", "verdict_commit",
     "verdict_notes", "verdict_source", "reconsidered_verdict",
+    # The four fields below were missing from the original upstream set even
+    # though every record the tool writes includes them and the README
+    # documents them as part of the schema. Codex caught this on PR #18
+    # (review_journal.py:1116 in the upstream layout): hand-edited journals
+    # missing these fields would pass validate() silently, weakening CI
+    # protection for downstream consumers.
+    "outdated", "verdict_refs", "verdict_history", "extras",
 }
 
 
@@ -1240,23 +1267,16 @@ def _sync_core(args: argparse.Namespace, infer: bool, write_backfill: bool) -> i
     for t in threads:
         rec = build_record(t, cfg)
         primary, reconsidered = extract_blocks_from_thread(t)
+
+        # Apply the primary block first (if present).
         if primary is not None:
             apply_block_to_record(rec, primary)
-            if not rec.resolved:
-                # Has a verdict but unresolved — RESOLVE NEEDED.
-                resolve_needed.append(rec)
-        else:
-            if rec.resolved:
-                if infer:
-                    profile = cfg.profile_for(rec.reviewer)
-                    block = infer_verdict(t, cfg, profile=profile, reviewer_login=rec.reviewer)
-                    if block is not None:
-                        apply_inferred_to_record(rec, block)
-                        inferred_pairs.append((rec, block))
-                    else:
-                        backfill_needed.append(rec)
-                else:
-                    backfill_needed.append(rec)
+
+        # Then apply the reconsidered block (it supersedes the primary).
+        # We do this BEFORE the enforcement queueing below so a reconsidered-
+        # only thread is correctly recognized as having a verdict — fixes the
+        # false BACKFILL/RESOLVE NEEDED signals identified by Codex (PR #18
+        # findings on review_journal.py:1247 and :1260 in the original layout).
         if reconsidered is not None:
             # A reconsidered block supersedes the original verdict. Push the
             # original into history (so the chain of custody is preserved) and
@@ -1281,6 +1301,28 @@ def _sync_core(args: argparse.Namespace, infer: bool, write_backfill: bool) -> i
             rec.verdict_notes = reconsidered.notes
             if reconsidered.finding_category:
                 rec.category = reconsidered.finding_category
+
+        # Enforcement queueing based on the FINAL state (after both primary and
+        # reconsidered have been applied).
+        has_verdict_block = primary is not None or reconsidered is not None
+        if has_verdict_block:
+            if not rec.resolved:
+                # Has a verdict but unresolved — RESOLVE NEEDED.
+                resolve_needed.append(rec)
+        elif rec.resolved:
+            # Resolved without any verdict block — try inference, otherwise
+            # flag for backfill.
+            if infer:
+                profile = cfg.profile_for(rec.reviewer)
+                block = infer_verdict(t, cfg, profile=profile, reviewer_login=rec.reviewer)
+                if block is not None:
+                    apply_inferred_to_record(rec, block)
+                    inferred_pairs.append((rec, block))
+                else:
+                    backfill_needed.append(rec)
+            else:
+                backfill_needed.append(rec)
+
         records.append(rec)
 
     records = sort_threads(records)
@@ -1395,7 +1437,10 @@ def main(argv: list[str]) -> int:
 
     p_ext = sub.add_parser("extract", help="Sync + infer verdicts for threads missing a block; write backfill md")
     add_sync_args(p_ext)
-    p_ext.add_argument("--accept-inferred", action="store_true", help="(Reserved; inferred verdicts are recorded as `inferred` until human confirmation flips them to `manual`.)")
+    # The `--accept-inferred` flag was previously registered as reserved but
+    # never implemented (per Codex finding on PR #18 against review_journal.py:1053
+    # in the upstream layout). The backfill.md guidance now correctly directs
+    # maintainers to hand-edit `verdict_source: "manual"` in the journal JSON.
     p_ext.set_defaults(func=cmd_extract)
 
     p_val = sub.add_parser("validate", help="Validate a journal file against the schema")
