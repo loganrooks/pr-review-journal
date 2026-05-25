@@ -1,0 +1,13 @@
+{
+  "name": "pr-review-journal",
+  "owner": {
+    "name": "Logan Rooks"
+  },
+  "plugins": [
+    {
+      "name": "pr-review-journal",
+      "source": "./",
+      "description": "Per-PR review journal: parses verdict-block disposition replies on review threads, infers verdicts from historical thread prose, records the result as auditable JSON. Ships with paired skills for the orchestrator (pr-review-triage) and reviewer (pr-reviewer) sides."
+    }
+  ]
+}
