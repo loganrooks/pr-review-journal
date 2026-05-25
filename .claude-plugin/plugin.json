@@ -1,0 +1,19 @@
+{
+  "name": "pr-review-journal",
+  "version": "0.1.0",
+  "description": "Per-PR review journal: parses verdict-block disposition replies, infers verdicts from historical thread prose, and records the result as auditable JSON. Ships with paired skills for the orchestrator and reviewer sides of a review thread.",
+  "author": {
+    "name": "Logan Rooks"
+  },
+  "homepage": "https://github.com/loganrooks/pr-review-journal",
+  "repository": "https://github.com/loganrooks/pr-review-journal",
+  "license": "MIT",
+  "keywords": [
+    "pr-review",
+    "code-review",
+    "github",
+    "agentic-devops",
+    "claude-code"
+  ],
+  "skills": "skills"
+}
