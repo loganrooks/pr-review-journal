@@ -12,6 +12,9 @@ reviewer behaviour as **config**, not code.
 The tool is Python stdlib + shell, depends only on `python3` and `gh`. Runs in
 any repo where `gh` is authenticated; no install required.
 
+_Part of the `agentic-*` family — see the `agentic-ecosystem` repo
+(`ECOSYSTEM.md`) for what this repo owns and how it composes with its siblings._
+
 ---
 
 ## What's in the box
