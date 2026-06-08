@@ -6,7 +6,7 @@
 | **RCI schema version** | 1.0 (proposed) |
 | **Author** | Logan Rooks |
 | **Created** | 2026-06-07 |
-| **Last revised** | 2026-06-08 — codex signal model corrected against live data (§18); open questions resolved (§17) |
+| **Last revised** | 2026-06-08 — codex signal model corrected against live data (§18: trigger non-determinism, feedback verified, no check-run); open questions resolved (§17) |
 | **Supersedes** | nothing (additive to the existing `reviewer_profiles` system) |
 
 > This is a design document, not yet an implementation. It defines the contracts
@@ -173,7 +173,7 @@ wait on a `review` signal **must be timeout-bounded** (§11).
   "accept": { "type": "comment_reaction", "content": "+1", "target": "finding_comment" },
   "reject": { "type": "comment_reaction", "content": "-1", "target": "finding_comment" }
 },
-"trigger": { "auto_on_push": true, "verified": true, "manual": { "type": "issue_comment", "body": "@codex review" } }
+"trigger": { "manual": { "type": "issue_comment", "body": "@codex review" }, "manual_verified": true, "auto_on_push": "unreliable", "auto_verified": false }
 ```
 
 The **default action implementation** interprets these descriptors (POST a
@@ -219,12 +219,15 @@ Hooks are **opt-in and security-sensitive** (arbitrary code) → §14.
     "running":  {"supported": false, "verified": false,
       "note": "👀 on the @codex trigger comment is transient/live-only; not reproducible from closed PRs. Poll for the terminal 'findings' signal instead."}
   },
-  "feedback": {"supported": true, "verified": false,
+  "feedback": {"supported": true, "verified": true,
     "accept": {"type":"comment_reaction","content":"+1","target":"finding_comment"},
     "reject": {"type":"comment_reaction","content":"-1","target":"finding_comment"},
-    "note": "Codex solicits 👍/👎 in each finding's text; the reaction mechanism is plausible but not yet captured in a fixture."},
-  "trigger": {"auto_on_push": true, "verified": true, "manual": {"type":"issue_comment","body":"@codex review"}},
-  "notes": "VERIFIED 2026-06-08 (closed PRs #8/#9): Codex posts a COMMENTED review titled '💡 Codex Review' per pass, stamped with commit.oid; every observed pass carried inline findings. It does NOT use issue comments or persistent reactions. 'findings'/'trigger' verified against review objects; 'running'/'clean'/'feedback' unverified (per-signal notes)."
+    "note": "Codex solicits 👍/👎 in each finding's text. The channel is persistent + queryable: #9 carries 7 👍 + 2 👎 by the maintainer on Codex finding (review-thread) comments. Verifies the action persists; NOT that Codex ingests it."},
+  "trigger": {
+    "manual": {"type":"issue_comment","body":"@codex review"}, "manual_verified": true,
+    "auto_on_push": "unreliable", "auto_verified": false,
+    "note": "One @codex review arms the PR and reliably yields >=1 review. Auto-re-review on later pushes is NON-DETERMINISTIC: every #9 push got reviewed (minutes), none of #8's two post-fix pushes did (10.6h open before merge, same single-trigger arming, cause unknown). Do NOT wait passively for auto — re-post @codex review per push you want reviewed."},
+  "notes": "VERIFIED 2026-06-08 (closed PRs #8/#9): Codex posts a COMMENTED review titled '💡 Codex Review' per pass, stamped with commit.oid; every observed pass carried inline findings. It uses NO issue comments and NO persistent self-reactions (checked issue, issue-comments, review-thread comments) and NO check-run. Verified: 'findings' (review objects), 'feedback' (persistent 👍/👎 on finding comments), 'manual' trigger. Unreliable/unverified: 'auto_on_push' (non-deterministic), 'clean'/'running' (no persistent signal found)."
 }
 ```
 
@@ -363,8 +366,12 @@ Given profile `P` for reviewer `R` on a PR at head SHA `H`:
    Operational merge-readiness uses the reviewer-agnostic `unresolvedThreadCount
    == 0`, which is a triage-state, not a reviewer signal.
 4. **feedback** — if supported, perform it; else no-op (optionally a plain reply).
-5. **trigger** — if `auto_on_push`, a push suffices; else if `manual` defined,
-   perform it; else re-request review via the GitHub API.
+5. **trigger** — prefer the *reliable* path: post `P.trigger.manual` after each
+   push you want reviewed. Treat `auto_on_push` as a bonus, never a guarantee
+   (non-deterministic for Codex), so **don't wait passively for an auto-review** —
+   re-trigger, then wait with a generous timeout. The orchestrator must never
+   merge on "no review yet" without either the review landing or a deliberate
+   decision.
 
 Step 3 is load-bearing: it converts an undetectable/unverified signal into a
 checkpoint instead of a false "done."
@@ -380,10 +387,15 @@ Independent of the rest of the rollout; applied 2026-06-08. The fixes:
    final head → times out).
 2. **SHA baseline, not count** — with an inline note that thread-reply review
    objects inflate counts.
-3. **Mandatory timeout** — because a reviewer may not re-review the final head
-   (head advanced) and may post nothing on a fully-clean commit (unconfirmed);
-   the no-review outcome is "verify", never a silent success. The transient
-   👀/👍 reactions are documented as live-only/unverified, not waited on.
+3. **Mandatory timeout** — because Codex's auto-re-review on push is
+   non-deterministic (it never re-reviewed #8's post-fix pushes across a 10.6h
+   window) and may post nothing on a fully-clean commit (unconfirmed); the
+   no-review outcome is "verify / re-trigger", never a silent success. The
+   transient 👀/👍 reactions are live-only/unverified, not waited on.
+4. **Re-trigger, don't wait passively.** The loop posts `@codex review` after
+   each push (the reliable trigger) rather than waiting for an auto-review that
+   may never come — moving the real "hang" risk (no auto-trigger) into an action
+   the orchestrator controls.
 
 ## 12. Conformance & testing
 
@@ -472,19 +484,37 @@ Probed closed PRs #8/#9 on `loganrooks/philpapers-mcp` (read-only `gh`):
   `COMMENTED`, each stamped with `commit.oid`. #9 had five Codex review passes
   (`75dfaf4`, `34d4f6d`, `02a7127`, `ceeda11`, `e91c9eb`), inline counts 3/1/1/2;
   the final pass is on the head SHA `e91c9eb` with `inline=2`.
-- **No persistent reactions.** `issues/{8,9}/reactions` returned no Codex
-  reaction; the only reaction-bearing comment (the `@codex review` trigger) had
-  all reaction groups empty. The 👀→👍 flip recorded earlier appears **transient
-  / live-only** and was not reproducible — hence `verified:false` for Codex
-  `running`/`clean`.
+- **No persistent self-reactions** across all three plausible subjects — issue,
+  issue-comments, *and* review-thread comments. The only review-thread reactions
+  are 7 👍 + 2 👎 placed *by the maintainer* on Codex's finding comments (the
+  feedback channel, below), never a Codex 👀/👍 of its own. So the earlier
+  "👀→👍 clean signal" is not reproducible from history; whether it is live-only
+  or never existed is **undetermined** — either way the design doesn't depend on
+  it (`running`/`clean` stay unverified).
+- **The feedback channel is persistent and verified.** Those 7 👍 / 2 👎 on
+  Codex finding (review-thread) comments are the usefulness reactions Codex
+  solicits; the action persists and is queryable (fixture in hand) → `feedback`
+  `verified:true`. (Verifies the *channel*, not that Codex ingests it.)
+- **No Codex check-run or commit status.** The only checks on either head are
+  `build-and-test` (github-actions). No persistent check-based running/clean
+  signal exists — the conservative §10 treatment of `clean` stands.
 - **No clean-pass sample.** Every observed Codex pass carried inline findings;
   "clean" was reached by *resolving threads* (`unresolvedThreadCount==0`), not a
-  Codex signal. Codex findings remain on the review object after resolution
-  (`inline` count doesn't drop), so a review's inline count is the pass's *posted*
-  findings, not the *unresolved* count.
-- **Codex does not always re-review the final head.** #8's only Codex review is on
-  `1aa2a01` while the merged head is `9b6cc88` — the head advanced after its
-  review. This is why the §11 wait must be timeout-bounded.
+  Codex signal. Findings remain on the review object after resolution, so a
+  review's inline count is the pass's *posted* findings, not the *unresolved*
+  count.
+- **Trigger is non-deterministic.** Both PRs had exactly one `@codex review`
+  comment. #8 → 1 review (`1aa2a01`); its two post-fix pushes (`c346c6c` 22:29,
+  `9b6cc88` 23:17) went **un-reviewed across a 10.6h window** before merge
+  (09:55 next day). #9 → 5 reviews from the same single trigger, following pushes
+  within minutes (plus one ~10.5h-lagged pass, landing ~5 min *after* merge). So
+  one trigger *arms* the PR, but whether a given push gets re-reviewed is
+  unreliable and latency ranges minutes→hours; cause unknown from the
+  orchestrator's vantage. → `auto_on_push: "unreliable"`; reliable path is an
+  explicit `@codex review` per push + a generous timeout (§6.4, §10, §11).
 
-This is the evidence behind §6.4's `verified` flags and the §11 remediation, and
-a standing example of principle 5 (verify before you trust) correcting the spec.
+This is the evidence behind §6.4's flags and the §11 remediation. Note this
+section was itself revised on 2026-06-08 after the prior framing ("transient/
+live-only reactions", "doesn't re-review the final head") was challenged and
+probed further — principle 5 (verify before you trust) correcting the spec a
+second time, against a wider search rather than the first convenient negative.
