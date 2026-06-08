@@ -134,7 +134,8 @@ A signal is a predicate over fetched GitHub data, plus a `supported` flag and a
 "signals": {
   "findings": { "supported": true, "verified": true,
     "any_of": [ {"type":"review","by":"self","title_matches":"Codex Review","commit":"head","has_inline_comments":true} ] },
-  "clean":    { "supported": true, "verified": false, "any_of": [ … ] },
+  "clean":    { "supported": true, "verified": true,
+    "any_of": [ {"type":"comment","by":"self","match":"Didn't find any major issues"} ] },
   "running":  { "supported": false, "verified": false }
 }
 ```
@@ -144,9 +145,9 @@ Observation `type`s (the vocabulary a consumer implements):
 | type | reads | notes |
 |---|---|---|
 | `review` | a PR review object | carries `state`, `commit.oid`, inline count → SHA-stampable. `commit:"head"` constrains it to the PR's current head SHA; `title_matches` filters by review title. **Preferred — persistent and verifiable.** |
-| `comment` | an issue/PR comment body | `match` regex; prose-scraping is a last resort |
-| `check_run` | a commit check/status | for bots that expose a check |
-| `issue_reaction` | a reaction on the PR conversation | mutable, **not** SHA-stamped, and **often transient/live-only → hard to verify from history.** Stays `verified:false`; don't depend on it |
+| `comment` | an issue/PR comment body (REST `issues/N/comments`) | `match` regex. A last resort for *vague* prose — but it is Codex's **authoritative clean channel** (the exact string `Didn't find any major issues`, §6.4). ⚠️ the REST login carries a `[bot]` suffix (`chatgpt-codex-connector[bot]`), unlike the GraphQL `review` login — match both. |
+| `check_run` | a commit check/status | for bots that expose a check (Codex does **not**) |
+| `issue_reaction` | a reaction on the PR conversation | mutable, **not** SHA-stamped, and **often transient/live-only → hard to verify from history.** A live `+1` from Codex *does* accompany a clean pass, but as a co-signal to the persistent `comment` — stays `verified:false`; don't depend on it alone |
 | `comment_reaction` | a reaction on a specific comment | same caveat |
 
 `by: "self"` resolves to the reviewer's login + `aliases`. `supported:false`
@@ -194,9 +195,12 @@ Hooks are **opt-in and security-sensitive** (arbitrary code) → §14.
 
 ### 6.4 The two reference profiles
 
-**Codex — `findings`/`trigger` verified, `clean`/`running`/`feedback` not**
-(empirically characterized on `loganrooks/philpapers-mcp` PRs #8/#9,
-2026-06-08; see §18):
+**Codex — `findings`/`clean`/`feedback`/manual-`trigger` verified; `running`
+and `auto_on_push` not** (characterized on `loganrooks/philpapers-mcp`: findings
+on closed PRs #8/#9, the clean pass on live probe #10, all 2026-06-08; see §18).
+This is the **hosted GitHub App** (`chatgpt-codex-connector`), *not* the
+open-source `openai/codex-action` whose documented SHA-ancestor/cache re-review
+logic does **not** apply here:
 
 ```jsonc
 "chatgpt-codex-connector": {
@@ -204,20 +208,27 @@ Hooks are **opt-in and security-sensitive** (arbitrary code) → §14.
   "kind": "bot:agentic-llm",
   "display_name": "Codex (via chatgpt-codex-connector)",
   "forge": "github",
+  "identity": {"graphql_login": "chatgpt-codex-connector", "rest_login": "chatgpt-codex-connector[bot]",
+    "note": "GOTCHA: the login differs by API surface. GraphQL reviews.author.login has NO suffix; REST issues/N/comments[].user.login HAS '[bot]'. A detector mixing REST+GraphQL must match BOTH — filtering REST by the bare login silently matches nothing (this bit the probe's own watcher, §18)."},
   "severity_patterns": [
     {"pattern":"\\bP0\\b","severity":"P0","canonical":"blocker"},
     {"pattern":"\\bP1\\b","severity":"P1","canonical":"high"},
     {"pattern":"\\bP2\\b","severity":"P2","canonical":"medium"},
     {"pattern":"\\bP3\\b","severity":"P3","canonical":"low"}
   ],
+  "severity_note": "Codex uses a P0–P3 priority scale (P0 critical … P3 suggestion). On GitHub it surfaces ONLY P0/P1 by default — P2/P3 won't appear unless an AGENTS.md review guideline escalates them. So absence of a finding ≠ no lower-priority issues; it means none at P0/P1.",
   "signals": {
     "findings": {"supported": true, "verified": true,
-      "any_of": [{"type":"review","by":"self","title_matches":"Codex Review","commit":"head","has_inline_comments":true}]},
-    "clean":    {"supported": true, "verified": false,
-      "any_of": [{"type":"review","by":"self","title_matches":"Codex Review","commit":"head","has_inline_comments":false}],
-      "note": "Candidate only — a zero-finding Codex review was never observed. Operational merge-readiness uses reviewer-agnostic unresolvedThreadCount==0, not this."},
+      "any_of": [{"type":"review","by":"self","title_matches":"Codex Review","commit":"head","has_inline_comments":true}],
+      "note": "FINDINGS path: a COMMENTED review object stamped commit.oid carrying >=1 inline comment (verified #8/#9). A DISTINCT channel from 'clean'."},
+    "clean":    {"supported": true, "verified": true,
+      "any_of": [
+        {"type":"comment","by":"self","match":"Didn't find any major issues"},
+        {"type":"issue_reaction","by":"self","content":"+1"}
+      ],
+      "note": "VERIFIED live on probe #10 (clean no-op): Codex posts a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues. Hooray!' (~85s after @codex review) and a +1 reaction on the PR body. The issue comment is the AUTHORITATIVE channel and matches independent 3rd-party attestation; the +1 is a secondary live co-signal (possibly elicited by the PR body asking it to 'indicate a clean pass'). CRITICAL: on a clean pass there is NO review object — a review-object-only detector misses clean entirely and times out."},
     "running":  {"supported": false, "verified": false,
-      "note": "👀 on the @codex trigger comment is transient/live-only; not reproducible from closed PRs. Poll for the terminal 'findings' signal instead."}
+      "note": "No durable 'running' signal. A 👀 may precede the response but was not captured on #10 (terminal response in ~85s); bare 👀-without-review is a documented OUTAGE (openai/codex#3808), not progress. Poll for the terminal clean/findings signal with a timeout."}
   },
   "feedback": {"supported": true, "verified": true,
     "accept": {"type":"comment_reaction","content":"+1","target":"finding_comment"},
@@ -226,8 +237,8 @@ Hooks are **opt-in and security-sensitive** (arbitrary code) → §14.
   "trigger": {
     "manual": {"type":"issue_comment","body":"@codex review"}, "manual_verified": true,
     "auto_on_push": "unreliable", "auto_verified": false,
-    "note": "One @codex review arms the PR and reliably yields >=1 review. Auto-re-review on later pushes is NON-DETERMINISTIC: every #9 push got reviewed (minutes), none of #8's two post-fix pushes did (10.6h open before merge, same single-trigger arming, cause unknown). Do NOT wait passively for auto — re-post @codex review per push you want reviewed."},
-  "notes": "VERIFIED 2026-06-08 (closed PRs #8/#9): Codex posts a COMMENTED review titled '💡 Codex Review' per pass, stamped with commit.oid; every observed pass carried inline findings. It uses NO issue comments and NO persistent self-reactions (checked issue, issue-comments, review-thread comments) and NO check-run. Verified: 'findings' (review objects), 'feedback' (persistent 👍/👎 on finding comments), 'manual' trigger. Unreliable/unverified: 'auto_on_push' (non-deterministic), 'clean'/'running' (no persistent signal found)."
+    "note": "One @codex review arms the PR and reliably yields >=1 review (#10: clean comment in ~85s). Auto-re-review on later pushes is NON-DETERMINISTIC: every #9 push got reviewed (minutes); NONE of #8's two post-fix pushes (10.6h) nor #10's clean 2nd push (15m) did. Mechanism (online research): GitHub exposes no reliable bot re-review hook, and the App's push-event ingestion silently drifts (openai/codex#15477). Do NOT wait passively for auto — re-post @codex review per push you want reviewed."},
+  "notes": "VERIFIED 2026-06-08. SPLIT-CHANNEL model: FINDINGS arrive as a COMMENTED review object titled 'Codex Review', stamped commit.oid, with inline comments (closed #8/#9). A CLEAN pass arrives instead as a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues' + a +1 on the PR body, with NO review object (live probe #10). (An earlier note here said Codex 'uses NO issue comments' — FALSE; that was inferred from findings-only closed PRs. Corrected by #10.) No check-run (only github-actions). Verified: 'findings', 'clean', 'feedback' (persistent maintainer 👍/👎 on finding comments), 'manual' trigger. Unverified: 'running', and 'auto_on_push' (non-deterministic — see trigger.note)."
 }
 ```
 
@@ -250,8 +261,11 @@ extends today's `profile_for()` human stub to signals):
 
 `findings` (a review on head SHA with inline comments) is the **one universally
 available signal** — it's forge-native thread state. `clean` is *unprovable* for
-an unknown reviewer (and, notably, for Codex too — see §10) → checkpoint. CR and
-Copilot profiles are reserved but unverified until observed (§12).
+an unknown reviewer (silence ≠ clean) → checkpoint. Codex is the exception: it
+emits an explicit clean signal (the "Didn't find any major issues" issue comment,
+§6.4), so its `clean` is verifiable — but on a *different channel* than its
+`findings`, which is why a single review-object poll is insufficient (§10/§11). CR
+and Copilot profiles are reserved but unverified until observed (§12).
 
 ## 7. Contract B — Journal record additions
 
@@ -357,14 +371,17 @@ Given profile `P` for reviewer `R` on a PR at head SHA `H`:
 2. **findings** — evaluate `P.signals.findings` (universal default: a review with
    inline comments on `H`). Always available; **timeout-bound** the wait (R may
    never review `H`).
-3. **clean** — if `P.signals.clean` is supported+**verified**, evaluate it; **else
-   `clean` is unprovable** → checkpoint:
+3. **clean** — if `P.signals.clean` is supported+**verified**, evaluate it **on its
+   declared channel**; **else `clean` is unprovable** → checkpoint:
    *"No findings observed on `H`, but `R` has no verified clean-signal — confirm
    before treating as done."* **Never auto-conclude clean on silence.** This
-   applies to the generic fallback *and to Codex* (its `clean` is `verified:false`
-   — a zero-finding review was never observed, and its reactions are live-only).
-   Operational merge-readiness uses the reviewer-agnostic `unresolvedThreadCount
-   == 0`, which is a triage-state, not a reviewer signal.
+   applies to the generic fallback. **Codex is the exception**: its `clean` IS
+   verified, but on a *different channel than `findings`* — a PR **issue comment**
+   matching "Didn't find any major issues" (+ a `+1` on the PR body), with **no
+   review object**. So evaluating Codex's `clean` requires polling the
+   issue-comment channel (REST, `[bot]` login), not just review objects (§11).
+   Operational merge-readiness still uses the reviewer-agnostic
+   `unresolvedThreadCount == 0`, a triage-state, not a reviewer signal.
 4. **feedback** — if supported, perform it; else no-op (optionally a plain reply).
 5. **trigger** — prefer the *reliable* path: post `P.trigger.manual` after each
    push you want reviewed. Treat `auto_on_push` as a bonus, never a guarantee
@@ -376,26 +393,38 @@ Given profile `P` for reviewer `R` on a PR at head SHA `H`:
 Step 3 is load-bearing: it converts an undetectable/unverified signal into a
 checkpoint instead of a false "done."
 
-## 11. First concrete deliverable — `monitoring.md` remediation (DONE)
+## 11. First concrete deliverable — `monitoring.md` remediation (DONE, amended by probe #10)
 
-Independent of the rest of the rollout; applied 2026-06-08. The fixes:
+Independent of the rest of the rollout; applied 2026-06-08, **amended the same day
+after live probe #10 disproved the clean-pass assumption.** The fixes:
 
-1. **Wait on the persistent review object, not a reaction or a count.** Pattern 1
-   now terminates when a `chatgpt-codex-connector` review whose `commit.oid` ==
-   head SHA appears, reporting findings (`comments.totalCount > 0`) vs clean
-   (`== 0`). Validated against closed #9 (`findings(2)`) and #8 (no review on the
-   final head → times out).
-2. **SHA baseline, not count** — with an inline note that thread-reply review
-   objects inflate counts.
-3. **Mandatory timeout** — because Codex's auto-re-review on push is
-   non-deterministic (it never re-reviewed #8's post-fix pushes across a 10.6h
-   window) and may post nothing on a fully-clean commit (unconfirmed); the
-   no-review outcome is "verify / re-trigger", never a silent success. The
-   transient 👀/👍 reactions are live-only/unverified, not waited on.
-4. **Re-trigger, don't wait passively.** The loop posts `@codex review` after
-   each push (the reliable trigger) rather than waiting for an auto-review that
-   may never come — moving the real "hang" risk (no auto-trigger) into an action
-   the orchestrator controls.
+1. **Detect on BOTH channels — this is the load-bearing correction.** Codex is
+   split-channel: **findings** arrive as a review object on head SHA with inline
+   comments; a **clean** pass arrives as a PR **issue comment** "Codex Review:
+   Didn't find any major issues" with **no review object at all**. The original
+   remediation polled only review objects, so it would have run a clean PR to
+   timeout and reported a false "no review" (probe #10 confirmed this — the clean
+   comment landed in ~85s while a review-only poll saw nothing for 30 min). Pattern
+   1 must therefore terminate on *either*: a Codex review whose `commit.oid` ==
+   head SHA (findings, `comments.totalCount > 0`), **or** a Codex issue comment
+   matching `Didn't find any major issues` (clean).
+2. **Mind the `[bot]` login split.** GraphQL `reviews.author.login` is
+   `chatgpt-codex-connector`; REST `issues/N/comments[].user.login` is
+   `chatgpt-codex-connector[bot]`. A poll mixing the two must match both spellings
+   — filtering REST by the bare login matches nothing (this exact bug made probe
+   #10's own watcher miss the response and time out; §18).
+3. **SHA baseline + mandatory timeout.** SHA baseline (not review count — thread
+   replies inflate counts). The timeout remains mandatory because the head may
+   advance past Codex's last action, or its push-event ingestion may **silently
+   drift** (openai/codex#15477) and post nothing; the no-response outcome is
+   "verify / re-trigger", never a silent success.
+4. **Re-trigger, don't wait passively.** The loop posts `@codex review` after each
+   push (the reliable trigger — there is **no reliable GitHub re-review hook** for
+   bots) rather than waiting for an auto-review that may never come.
+
+*Status:* the embedded Pattern-1 bash in `references/monitoring.md` is updated to
+the two-channel detector below. It remains an acknowledged Phase-0 stopgap that
+should migrate to a fixture-tested `review_journal.py` subcommand (§12, §16).
 
 ## 12. Conformance & testing
 
@@ -459,11 +488,11 @@ profiles, versioned contracts.
 
 ## 17. Open questions — resolutions
 
-- **Q1 (reaction-based `clean` robustness) — DISSOLVED.** Live data (§18) shows
-  Codex's `clean`/`running` reactions are not reproducible from history (transient
-  / live-only). The design no longer depends on them; it polls the persistent
-  `review`-on-head-SHA signal with a timeout. The stale-👍 problem disappears with
-  the reaction.
+- **Q1 (reaction-based `clean` robustness) — DISSOLVED.** A live `+1` *does* appear
+  on a clean pass (probe #10, §18), so a reaction exists — but the design keys
+  `clean` on the **persistent issue-comment text** ("Didn't find any major issues"),
+  not the reaction, so the stale-👍 problem never arises. The reaction is at most a
+  secondary co-signal.
 - **Q2 (`config_fingerprint` scope) — RESOLVED: whole-file hash + subset
   snapshot.** A false "same config" silently corrupts an experiment (worse than
   over-splitting), so the authoritative hash is over the whole file; the reviewer-
@@ -471,18 +500,22 @@ profiles, versioned contracts.
   reconstructable later without a brittle "relevant subset" definition. (§7.)
 - **Q3 (category granularity) — RESOLVED: ~7 top-level + open tags.** Few high-
   agreement buckets as the comparable spine; tags carry optional detail. (§9.2.)
-- **Q4 (NEW, open):** Does Codex post a *zero-finding* review on a fully-clean
-  commit, or nothing at all? Unknown — no clean pass observed on #8/#9. Resolving
-  it needs a live PR where Codex has nothing to flag; until then `clean` stays
-  `verified:false` and the timeout/checkpoint covers both cases.
+- **Q4 — RESOLVED (live probe #10, §18): neither a zero-finding *review* nor
+  silence.** On a fully-clean commit Codex posts a PR **issue comment** "Codex
+  Review: Didn't find any major issues. Hooray!" (+ a `+1` on the PR body) and **no
+  review object**. So `clean` is now `verified:true` but on a *separate channel*
+  from `findings` — which is exactly why a review-object-only poll fails (§10/§11).
+  Corroborated independently by the online research (two 3rd-party merge gates key
+  on the same string; the OpenAI SDK cookbook documents an always-present verdict).
 
 ## 18. Empirical basis (dogfood, 2026-06-08)
 
 Probed closed PRs #8/#9 on `loganrooks/philpapers-mcp` (read-only `gh`):
 
-- Codex communicates via **review objects** titled "💡 Codex Review", state
-  `COMMENTED`, each stamped with `commit.oid`. #9 had five Codex review passes
-  (`75dfaf4`, `34d4f6d`, `02a7127`, `ceeda11`, `e91c9eb`), inline counts 3/1/1/2;
+- Codex communicates **findings** via **review objects** titled "Codex Review",
+  state `COMMENTED`, each stamped with `commit.oid` (clean passes use a different
+  channel — see the live-probe block below). #9 had five Codex review passes
+  (`75dfaf4`, `34d4f6d`, `02a7127`, `ceeda11`, `e91c9eb`), inline counts 4/3/1/1/2;
   the final pass is on the head SHA `e91c9eb` with `inline=2`.
 - **No persistent self-reactions** across all three plausible subjects — issue,
   issue-comments, *and* review-thread comments. The only review-thread reactions
@@ -513,8 +546,46 @@ Probed closed PRs #8/#9 on `loganrooks/philpapers-mcp` (read-only `gh`):
   orchestrator's vantage. → `auto_on_push: "unreliable"`; reliable path is an
   explicit `@codex review` per push + a generous timeout (§6.4, §10, §11).
 
-This is the evidence behind §6.4's flags and the §11 remediation. Note this
-section was itself revised on 2026-06-08 after the prior framing ("transient/
-live-only reactions", "doesn't re-review the final head") was challenged and
-probed further — principle 5 (verify before you trust) correcting the spec a
-second time, against a wider search rather than the first convenient negative.
+**Live probe #10 (clean-pass — the one closed PRs couldn't show).** A self-declared
+no-op PR (`test/codex-reviewer-probe`, a trivial pure function under
+`src/experiments/`, excluded from the build) + one `@codex review`. Result in ~85s:
+
+- **Clean pass = a PR issue comment** "Codex Review: Didn't find any major issues.
+  Hooray!" (+ a collapsible "About Codex" block), **plus a `+1` reaction on the PR
+  body** by `chatgpt-codex-connector[bot]`, and **no review object**. This overturns
+  the earlier §6.4 "clean = a zero-inline-comment review" candidate: findings and
+  clean are *different channels*.
+- **A self-inflicted detection bug confirmed the very risk this work targets.** The
+  probe's own watcher filtered REST issue-comments by the GraphQL login
+  `chatgpt-codex-connector` and so matched nothing — it ran a full 30-min timeout
+  while Codex had actually answered in 85s. The REST login is
+  `chatgpt-codex-connector[bot]`. Now a first-class `identity` field (§6.4) and a
+  §11 caveat: the exact failure the monitoring fix exists to prevent, reproduced
+  live by the verifier itself.
+- **No Codex check-run** (only `build-and-test`), consistent with #8/#9.
+- **Auto-on-push held false a third time — and on a *clean* push.** A second
+  trivially-clean push (`e8c8d7c`, no re-trigger) drew **no review and no comment
+  within 15 min**. This rules out the alternative that #8's un-reviewed pushes were
+  simply "clean → silent": a clean pass *does* post a comment when reviewed, so the
+  absence is genuinely "auto didn't fire," matching #8. → `auto_on_push: "unreliable"`.
+
+**Online research (two web agents, 2026-06-08).** Frames and corroborates the above:
+(a) the reviewer here is the **hosted GitHub App**, distinct from the open-source
+`openai/codex-action` whose deterministic SHA/cache re-review logic does *not*
+apply; (b) the clean string is independently attested (two 3rd-party merge-gate
+tools key on it; the OpenAI SDK cookbook documents an always-present verdict +
+possibly-empty `findings[]`); (c) severity is **P0–P3**, GitHub surfacing only
+P0/P1; (d) the auto-on-push non-determinism has a *mechanism* — GitHub exposes **no
+reliable bot re-review hook**, and the App's push-event ingestion **silently
+drifts** (openai/codex#15477, #3808) — so "re-trigger manually" is the documented
+remedy, not a workaround; (e) the 👍/👎 feedback is telemetry with no documented
+functional effect. Sources in the project memory.
+
+This is the evidence behind §6.4's flags and the §11 remediation. The section was
+revised **three times** on 2026-06-08 as principle 5 (verify before you trust) bit
+in turn: first the review-object model (over closed PRs), then the trigger
+non-determinism (a wider probe refuting "doesn't re-review the final head"), then
+the clean-pass channel (a *live* probe refuting both "clean = empty review" and the
+convenient "maybe it posts nothing"). Each correction came from probing the
+unprobed subject rather than trusting the first convenient negative — including, the
+third time, a bug in the verifier itself.

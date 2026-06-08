@@ -14,45 +14,57 @@ The single most common mistake is using `Monitor` with `tail -f` or `while true`
 
 ## Pattern 1 — wait for one signal (single notification)
 
-Use case: you posted `@codex review` (the reliable trigger — a bare push may *not* auto-re-review; see the note) and need to know when the pass *finishes*. The reliable, persistent signal is the **review object keyed to the pushed commit SHA** — not a reaction.
+Use case: you posted `@codex review` (the reliable trigger — a bare push may *not* auto-re-review; see the note) and need to know when the pass *finishes*. Codex is **split-channel**: a pass with **findings** lands as a review object keyed to the pushed commit SHA; a **clean** pass lands as a **PR issue comment** ("…Didn't find any major issues") with *no review object at all*. You must poll **both** — polling reviews alone runs a clean pass to timeout.
 
-> **Codex specifics (verified 2026-06-08 against closed PRs).** Codex posts a `COMMENTED` review titled "💡 Codex Review" each pass, stamped with `commit.oid`. Its inline-comment count (`comments.totalCount`) tells findings (≥1) from a (so-far-unobserved) clean review (0). **Don't key on a review *count*** — thread-reply review objects inflate it and cause false triggers; key on `commit.oid == head SHA`. Two cautions that make the timeout below mandatory: (a) Codex does **not** always re-review the final commit — if the head advances after its last review (more pushes, a merge commit), no review exists for the new head; (b) whether Codex posts a zero-finding review on a fully-clean commit, or nothing at all, is **unconfirmed** (no clean sample observed). The 👀/👍 reactions some bots use are **transient/live-only and were not reproducible from history** — treat them as unverified, not a signal to wait on. **Trigger caveat:** one `@codex review` arms the PR, but auto-re-review on later pushes is **non-deterministic** (it followed every #9 push but *none* of #8's, which sat un-reviewed for 10.6h) — so **re-post `@codex review` after each push** rather than waiting for an auto-review that may never come, and keep the timeout generous (re-reviews can lag hours). See `docs/design/reviewer-capability-interface.md` §6.4/§10.
+> **Codex specifics (verified 2026-06-08; clean pass confirmed live on probe #10).**
+> - **Findings:** a `COMMENTED` review titled "Codex Review", stamped `commit.oid`, with ≥1 inline comment. **Key on `commit.oid == head SHA`, not a review *count*** — thread-reply review objects inflate counts.
+> - **Clean:** a PR **issue comment** "Codex Review: Didn't find any major issues. Hooray!" (plus a `+1` reaction on the PR body), and **no review object**. There is *no* zero-inline-comment review for a clean pass — polling reviews alone misses it entirely.
+> - **`[bot]` login gotcha:** GraphQL `reviews.author.login` is `chatgpt-codex-connector`; REST `issues/N/comments[].user.login` is `chatgpt-codex-connector[bot]`. Match **both** — filtering the REST surface by the bare login silently matches nothing (this bit the very probe that found the clean channel).
+> - **Timeout still mandatory:** the head may advance past Codex's last action, or its push-event ingestion may **silently drift and post nothing** (openai/codex#15477). A bare 👀-without-review is an *outage* (#3808), not progress — don't wait on it.
+> - **Trigger caveat:** one `@codex review` arms the PR, but auto-re-review on later pushes is **non-deterministic** (followed every #9 push, *none* of #8's across 10.6h; GitHub exposes no reliable bot re-review hook) — **re-post `@codex review` after each push** and keep the timeout generous. See `docs/design/reviewer-capability-interface.md` §6.4/§10/§11.
 
 ```bash
 PR=9
 REPO=loganrooks/philpapers-mcp
 OWNER=${REPO%/*}; NAME=${REPO#*/}
-BOT=chatgpt-codex-connector
+GQL_BOT=chatgpt-codex-connector          # GraphQL reviews.author.login (NO suffix)
+REST_BOT='chatgpt-codex-connector[bot]'  # REST comments .user.login (WITH [bot])
 
 SHA=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
-DEADLINE=$(( $(date +%s) + 1200 ))   # cap the wait: Codex may post no review on this head
+SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # set BEFORE you post @codex review; a clean comment must be newer
+DEADLINE=$(( $(date +%s) + 1200 ))     # head may move, or push-event ingestion may drift and post nothing
 
 pass_done() {
-  # Sum inline comments across $BOT reviews whose commit.oid is the pushed SHA.
-  # No review yet -> null -> -1 (keep waiting). 0 -> clean. >0 -> findings.
-  local n
+  # Codex is SPLIT-CHANNEL: findings = a review on the head SHA WITH inline comments;
+  # a CLEAN pass = a PR ISSUE COMMENT "...find any major issues" with NO review object.
+  # Poll BOTH, mind the [bot] login on REST, or a clean pass runs to timeout.
+  local n c
+  # (1) findings channel — GraphQL (bare login), keyed on commit.oid == head SHA.
   n=$(gh api graphql -f query='
     query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){
       pullRequest(number:$p){reviews(last:30){nodes{author{login} commit{oid} comments{totalCount}}}}}}' \
     -F o="$OWNER" -F n="$NAME" -F p="$PR" \
     --jq "([.data.repository.pullRequest.reviews.nodes[]
-            | select(.author.login==\"$BOT\" and .commit.oid==\"$SHA\")]
-           | (map(.comments.totalCount)|add)) // -1" 2>/dev/null)
-  case "$n" in
-    ""|-1) return 1 ;;
-    0)     echo clean;         return 0 ;;
-    *)     echo "findings($n)"; return 0 ;;
-  esac
+            | select(.author.login==\"$GQL_BOT\" and .commit.oid==\"$SHA\")]
+           | (map(.comments.totalCount)|add)) // 0" 2>/dev/null)
+  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then echo "findings($n)"; return 0; fi
+  # (2) clean channel — REST ([bot] login): a clean comment newer than your trigger.
+  c=$(gh api "repos/$REPO/issues/$PR/comments" \
+        --jq "[.[] | select(.user.login==\"$REST_BOT\"
+               and (.created_at > \"$SINCE\")
+               and (.body | test(\"find any major issues\")))] | length" 2>/dev/null)
+  if [ "${c:-0}" -gt 0 ] 2>/dev/null; then echo clean; return 0; fi
+  return 1
 }
 
 until OUT=$(pass_done); do
-  [ "$(date +%s)" -ge "$DEADLINE" ] && { echo "timeout: no Codex review on $SHA — verify (clean-no-review, slow, or head moved)"; break; }
+  [ "$(date +%s)" -ge "$DEADLINE" ] && { echo "timeout: no findings-review or clean-comment on $SHA — verify (slow, head moved, or ingestion drift) and re-post @codex review"; break; }
   sleep 30
 done
 [ -n "$OUT" ] && echo "Codex pass on PR $PR ($SHA): $OUT"
 ```
 
-Run via `Bash` with `run_in_background: true`. The loop exits when Codex's review lands on the head SHA (reporting findings vs clean) **or** the deadline trips — so it neither hangs nor declares a silent success. *Validated:* on closed #9 this returns `findings(2)` for head `e91c9eb`; on #8 it correctly finds no review on the final head and would time out. Note: a review landing is "this pass finished", **not** "ready to merge" — merge-readiness is `unresolvedThreadCount==0` (reviewer-agnostic; see the quick-decision table), since Codex's findings stay on its review object after you resolve the threads.
+Run via `Bash` with `run_in_background: true`. The loop exits when **either** a findings-review on the head SHA **or** a clean issue-comment appears, **or** the deadline trips — so it neither hangs on a clean pass (the old review-only version did) nor declares a silent success. *Validated 2026-06-08:* probe #10's clean pass posted `Codex Review: Didn't find any major issues` ~85s after the trigger (issue comment, no review object); closed #9 returns `findings(2)` for head `e91c9eb`. Note: a pass finishing is "this pass finished", **not** "ready to merge" — merge-readiness is `unresolvedThreadCount==0` (reviewer-agnostic; see the quick-decision table), since Codex's findings stay on its review object after you resolve the threads.
 
 Variant — **generic fallback for a reviewer with no clean-signal** (most non-Codex bots). Such a reviewer can only be observed to *post*; "clean" is unprovable (it just stays silent), so this wait must be **timeout-bounded** and the no-review outcome treated as "confirm before merge", never as a silent success (see the RCI degradation rule, §10):
 
@@ -129,7 +141,7 @@ tail -f deploy.log | grep -E --line-buffered "Deploy succeeded|Deploy failed|Tra
 ```
 
 For a PR-review wait, the failure signatures include:
-- **No review lands on the head SHA** — either the head advanced past the reviewer's last review (more pushes, a merge commit), or the reviewer posts nothing on a fully-clean commit (unconfirmed for Codex). A review-wait then stays silent forever. Always bound it with a timeout-then-verify (Pattern 1 does), and remember "ready to merge" is `unresolvedThreadCount==0`, not a reviewer signal. (Transient 👀/👍 reactions are live-only and unverifiable from history — don't wait on them.)
+- **No review lands on the head SHA** — the head advanced past the reviewer's last review (more pushes, a merge commit), or its push-event ingestion drifted and posted nothing (openai/codex#15477). A review-only wait then stays silent forever. **For Codex specifically, "no review object" is NOT the same as "clean"** — a clean pass is a PR issue comment ("…find any major issues"), not a review object, so Pattern 1 polls that channel too (and matches the REST `[bot]` login). Always bound the wait with a timeout-then-verify, and remember "ready to merge" is `unresolvedThreadCount==0`, not a reviewer signal. (A bare 👀-without-review is an outage, not progress — don't wait on it.)
 - Codex posts "needs environment setup" instead of a review
 - CR's quota is exhausted (the "Review skipped" status check)
 - The reviewer's GitHub App was uninstalled mid-review
