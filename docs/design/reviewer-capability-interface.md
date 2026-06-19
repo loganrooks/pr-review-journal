@@ -226,7 +226,7 @@ logic does **not** apply here:
         {"type":"comment","by":"self","match":"Didn't find any major issues"},
         {"type":"issue_reaction","by":"self","content":"+1"}
       ],
-      "note": "VERIFIED live on probe #10 (clean no-op): Codex posts a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues. Hooray!' (~85s after @codex review) and a +1 reaction on the PR body. The issue comment is the AUTHORITATIVE channel and matches independent 3rd-party attestation; the +1 is a secondary live co-signal (possibly elicited by the PR body asking it to 'indicate a clean pass'). CRITICAL: on a clean pass there is NO review object — a review-object-only detector misses clean entirely and times out."},
+      "note": "VERIFIED live on probe #10 (clean no-op): Codex posts a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues. Hooray!' (~85s after @codex review) and a +1 reaction on the PR body. The issue comment is the AUTHORITATIVE channel and matches independent 3rd-party attestation; the +1 is a secondary live co-signal (possibly elicited by the PR body asking it to 'indicate a clean pass'). CRITICAL: on a clean pass there is NO review object — a review-object-only detector misses clean entirely and times out. REPLICATED on probe #12 (2026-06-19, a real two-finding fix PR, not a no-op): clean issue comment at commit 85662d7 ~4.5m after @codex review, again with a +1 and NO review object — confirms the channel on independent content. NB the sign-off WORD VARIES ('Hooray!' on #10, 'Breezy!' on #12); match the stable substring 'Didn't find any major issues', NEVER the sign-off."},
     "running":  {"supported": false, "verified": false,
       "note": "No durable 'running' signal. A 👀 may precede the response but was not captured on #10 (terminal response in ~85s); bare 👀-without-review is a documented OUTAGE (openai/codex#3808), not progress. Poll for the terminal clean/findings signal with a timeout."}
   },
@@ -238,7 +238,7 @@ logic does **not** apply here:
     "manual": {"type":"issue_comment","body":"@codex review"}, "manual_verified": true,
     "auto_on_push": "unreliable", "auto_verified": false,
     "note": "One @codex review arms the PR and reliably yields >=1 review (#10: clean comment in ~85s). Auto-re-review on later pushes is NON-DETERMINISTIC: every #9 push got reviewed (minutes); NONE of #8's two post-fix pushes (10.6h) nor #10's clean 2nd push (15m) did. Mechanism (online research): GitHub exposes no reliable bot re-review hook, and the App's push-event ingestion silently drifts (openai/codex#15477). Do NOT wait passively for auto — re-post @codex review per push you want reviewed."},
-  "notes": "VERIFIED 2026-06-08. SPLIT-CHANNEL model: FINDINGS arrive as a COMMENTED review object titled 'Codex Review', stamped commit.oid, with inline comments (closed #8/#9). A CLEAN pass arrives instead as a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues' + a +1 on the PR body, with NO review object (live probe #10). (An earlier note here said Codex 'uses NO issue comments' — FALSE; that was inferred from findings-only closed PRs. Corrected by #10.) No check-run (only github-actions). Verified: 'findings', 'clean', 'feedback' (persistent maintainer 👍/👎 on finding comments), 'manual' trigger. Unverified: 'running', and 'auto_on_push' (non-deterministic — see trigger.note)."
+  "notes": "VERIFIED 2026-06-08 (clean-pass replicated on #12, 2026-06-19). SPLIT-CHANNEL model: FINDINGS arrive as a COMMENTED review object titled 'Codex Review', stamped commit.oid, with inline comments (closed #8/#9). A CLEAN pass arrives instead as a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues' + a +1 on the PR body, with NO review object (live probe #10). (An earlier note here said Codex 'uses NO issue comments' — FALSE; that was inferred from findings-only closed PRs. Corrected by #10.) No check-run (only github-actions). Verified: 'findings', 'clean', 'feedback' (persistent maintainer 👍/👎 on finding comments), 'manual' trigger. Unverified: 'running', and 'auto_on_push' (non-deterministic — see trigger.note)."
 }
 ```
 
@@ -508,7 +508,7 @@ profiles, versioned contracts.
   Corroborated independently by the online research (two 3rd-party merge gates key
   on the same string; the OpenAI SDK cookbook documents an always-present verdict).
 
-## 18. Empirical basis (dogfood, 2026-06-08)
+## 18. Empirical basis (dogfood, 2026-06-08; clean-pass replicated on #12, 2026-06-19)
 
 Probed closed PRs #8/#9 on `loganrooks/philpapers-mcp` (read-only `gh`):
 
@@ -568,6 +568,17 @@ no-op PR (`test/codex-reviewer-probe`, a trivial pure function under
   within 15 min**. This rules out the alternative that #8's un-reviewed pushes were
   simply "clean → silent": a clean pass *does* post a comment when reviewed, so the
   absence is genuinely "auto didn't fire," matching #8. → `auto_on_push: "unreliable"`.
+
+**Live probe #12 (clean-pass on a *real* fix — replication, 2026-06-19).** Unlike #10's
+no-op, this was a genuine two-finding bugfix PR (`philpapers-mcp#12`, fixing the two Codex
+P2 threads on #9). One `@codex review` → in ~4.5 min, the *same* clean channel: a PR issue
+comment "Codex Review: Didn't find any major issues. **Breezy!**" stamped `Reviewed commit:
+85662d7`, **plus a `+1`** on the PR body, and **no review object** — independently
+replicating #10 on different content. Two refinements: (a) the sign-off word **varies**
+("Hooray!" #10 → "Breezy!" #12), so a detector must match the stable substring `Didn't find
+any major issues`, never the sign-off; (b) the two-channel `pass_done()` from §11 /
+`monitoring.md` was itself run live against #12 and returned `clean` correctly — the
+remediation validated by the very loop that produced it.
 
 **Online research (two web agents, 2026-06-08).** Frames and corroborates the above:
 (a) the reviewer here is the **hosted GitHub App**, distinct from the open-source
