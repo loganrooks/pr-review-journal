@@ -144,7 +144,7 @@ Observation `type`s (the vocabulary a consumer implements):
 
 | type | reads | notes |
 |---|---|---|
-| `review` | a PR review object | carries `state`, `commit.oid`, inline count → SHA-stampable. `commit:"head"` constrains it to the PR's current head SHA; `title_matches` filters by review title. **Preferred — persistent and verifiable.** |
+| `review` | a PR review object | carries `state`, `commit.oid`, `bodyText`, inline count → SHA-stampable. `commit:"head"` constrains it to the PR's current head SHA; `body_matches` filters the review **body** (GraphQL `PullRequestReview` has **no title field** — the "Codex Review" string lives in `bodyText`); `since:"trigger"` constrains to reviews `submittedAt` after your trigger, so a re-trigger on the same SHA can't match a stale prior review. **Preferred — persistent and verifiable.** |
 | `comment` | an issue/PR comment body (REST `issues/N/comments`) | `match` regex. A last resort for *vague* prose — but it is Codex's **authoritative clean channel** (the exact string `Didn't find any major issues`, §6.4). ⚠️ the REST login carries a `[bot]` suffix (`chatgpt-codex-connector[bot]`), unlike the GraphQL `review` login — match both. |
 | `check_run` | a commit check/status | for bots that expose a check (Codex does **not**) |
 | `issue_reaction` | a reaction on the PR conversation | mutable, **not** SHA-stamped, and **often transient/live-only → hard to verify from history.** A live `+1` from Codex *does* accompany a clean pass, but as a co-signal to the persistent `comment` — stays `verified:false`; don't depend on it alone |
@@ -219,14 +219,12 @@ logic does **not** apply here:
   "severity_note": "Codex uses a P0–P3 priority scale (P0 critical … P3 suggestion). On GitHub it surfaces ONLY P0/P1 by default — P2/P3 won't appear unless an AGENTS.md review guideline escalates them. So absence of a finding ≠ no lower-priority issues; it means none at P0/P1.",
   "signals": {
     "findings": {"supported": true, "verified": true,
-      "any_of": [{"type":"review","by":"self","title_matches":"Codex Review","commit":"head","has_inline_comments":true}],
-      "note": "FINDINGS path: a COMMENTED review object stamped commit.oid carrying >=1 inline comment (verified #8/#9). A DISTINCT channel from 'clean'."},
+      "any_of": [{"type":"review","by":"self","body_matches":"Codex Review","commit":"head","has_inline_comments":true,"since":"trigger"}],
+      "note": "FINDINGS path: a COMMENTED review object stamped commit.oid carrying >=1 inline comment (verified #8/#9). A DISTINCT channel from 'clean'. body_matches NOT title_matches — GraphQL PullRequestReview has no title field ('Codex Review' is in bodyText). since:'trigger' (submittedAt > the trigger time) so a re-trigger on the SAME head SHA can't match a stale prior review and report findings before Codex re-responds (PRJ#8 P2)."},
     "clean":    {"supported": true, "verified": true,
-      "any_of": [
-        {"type":"comment","by":"self","match":"Didn't find any major issues"},
-        {"type":"issue_reaction","by":"self","content":"+1"}
-      ],
-      "note": "VERIFIED live on probe #10 (clean no-op): Codex posts a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues. Hooray!' (~85s after @codex review) and a +1 reaction on the PR body. The issue comment is the AUTHORITATIVE channel and matches independent 3rd-party attestation; the +1 is a secondary live co-signal (possibly elicited by the PR body asking it to 'indicate a clean pass'). CRITICAL: on a clean pass there is NO review object — a review-object-only detector misses clean entirely and times out. REPLICATED on probe #12 (2026-06-19, a real two-finding fix PR, not a no-op): clean issue comment at commit 85662d7 ~4.5m after @codex review, again with a +1 and NO review object — confirms the channel on independent content. NB the sign-off WORD VARIES ('Hooray!' on #10, 'Breezy!' on #12); match the stable substring 'Didn't find any major issues', NEVER the sign-off."},
+      "signal":    {"type":"comment","by":"self","match":"Didn't find any major issues","since":"trigger"},
+      "co_signal": {"type":"issue_reaction","by":"self","content":"+1","authoritative":false},
+      "note": "VERIFIED live on probe #10 (clean no-op): Codex posts a PR ISSUE COMMENT 'Codex Review: Didn't find any major issues. Hooray!' (~85s after @codex review) and a +1 reaction on the PR body. The issue comment is the AUTHORITATIVE channel and matches independent 3rd-party attestation; the +1 is a secondary live co-signal (possibly elicited by the PR body asking it to 'indicate a clean pass'). CRITICAL: on a clean pass there is NO review object — a review-object-only detector misses clean entirely and times out. REPLICATED on probe #12 (2026-06-19, a real two-finding fix PR, not a no-op): clean issue comment at commit 85662d7 ~4.5m after @codex review, again with a +1 and NO review object — confirms the channel on independent content. NB the sign-off WORD VARIES ('Hooray!' on #10, 'Breezy!' on #12); match the stable substring 'Didn't find any major issues', NEVER the sign-off. SCOPE (PRJ#8 P2): the comment is the AUTHORITATIVE signal and MUST be newer than the trigger (since:'trigger' — created_at > $SINCE); a stale clean comment or +1 from a PRIOR pass must NOT satisfy clean after new commits. The +1 is a NON-AUTHORITATIVE co_signal (authoritative:false), never sufficient alone."},
     "running":  {"supported": false, "verified": false,
       "note": "No durable 'running' signal. A 👀 may precede the response but was not captured on #10 (terminal response in ~85s); bare 👀-without-review is a documented OUTAGE (openai/codex#3808), not progress. Poll for the terminal clean/findings signal with a timeout."}
   },
@@ -430,15 +428,17 @@ should migrate to a fixture-tested `review_journal.py` subcommand (§12, §16).
 
 - **Fixture replay.** The signal evaluator consumes the same captured-PR fixtures
   the parser uses (`tests/fixtures/*.json`). A profile's `verified` signals are
-  asserted against a real captured response. The Codex fixture is the **review
-  objects** (titled "💡 Codex Review", with `commit.oid` + inline counts) from a
-  findings pass; a clean-pass fixture is still **needed** (none observed yet).
+  asserted against a real captured response. The Codex fixtures are the **review
+  objects** (body "💡 Codex Review", with `commit.oid` + inline counts) from a
+  findings pass (#8/#9) and the **clean-pass** issue-comment + `+1` (probes
+  #10/#12, §18).
 - **`validate-profile`** subcommand — checks a profile against the RCI schema
   (required keys, known observation types, `verified` only where a fixture backs
   it).
 - **`verified` gate.** No signal ships `verified:true` without a backing fixture.
-  Codex `clean`/`running`/`feedback`, and all CR/Copilot signals, stay
-  `verified:false` until observed.
+  Codex `findings`/`clean`/`feedback` are now `verified:true` (fixtures: findings
+  #8/#9, clean #10/#12, feedback's persistent 👍/👎 on #9); Codex `running` and all
+  CR/Copilot signals stay `verified:false` until observed.
 
 ## 13. Versioning & migration
 

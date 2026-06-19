@@ -42,14 +42,18 @@ pass_done() {
   # (1) findings channel — GraphQL (bare login), keyed on commit.oid == head SHA.
   n=$(gh api graphql -f query='
     query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){
-      pullRequest(number:$p){reviews(last:30){nodes{author{login} commit{oid} comments{totalCount}}}}}}' \
+      pullRequest(number:$p){reviews(last:30){nodes{author{login} commit{oid} submittedAt comments{totalCount}}}}}}' \
     -F o="$OWNER" -F n="$NAME" -F p="$PR" \
     --jq "([.data.repository.pullRequest.reviews.nodes[]
-            | select(.author.login==\"$GQL_BOT\" and .commit.oid==\"$SHA\")]
+            | select(.author.login==\"$GQL_BOT\" and .commit.oid==\"$SHA\" and (.submittedAt > \"$SINCE\"))]
            | (map(.comments.totalCount)|add)) // 0" 2>/dev/null)
   if [ "${n:-0}" -gt 0 ] 2>/dev/null; then echo "findings($n)"; return 0; fi
   # (2) clean channel — REST ([bot] login): a clean comment newer than your trigger.
-  c=$(gh api "repos/$REPO/issues/$PR/comments" \
+  # ?since= filters server-side to comments updated since the trigger (small set),
+  # so the clean comment can't hide past the default 30-per-page window. (Prefer
+  # this to `--paginate`, which composes badly with a `length` jq — it counts
+  # per-page, not a total.)
+  c=$(gh api "repos/$REPO/issues/$PR/comments?since=$SINCE&per_page=100" \
         --jq "[.[] | select(.user.login==\"$REST_BOT\"
                and (.created_at > \"$SINCE\")
                and (.body | test(\"find any major issues\")))] | length" 2>/dev/null)
