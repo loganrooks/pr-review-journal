@@ -133,12 +133,15 @@ A signal is a predicate over fetched GitHub data, plus a `supported` flag and a
 ```jsonc
 "signals": {
   "findings": { "supported": true, "verified": true,
-    "any_of": [ {"type":"review","by":"self","title_matches":"Codex Review","commit":"head","has_inline_comments":true} ] },
+    "any_of": [ {"type":"review","by":"self","body_matches":"Codex Review","commit":"head","has_inline_comments":true,"since":"trigger"} ] },
   "clean":    { "supported": true, "verified": true,
-    "any_of": [ {"type":"comment","by":"self","match":"Didn't find any major issues"} ] },
+    "signal":    {"type":"comment","by":"self","match":"Didn't find any major issues","since":"trigger"},
+    "co_signal": {"type":"issue_reaction","by":"self","content":"+1","authoritative":false} },
   "running":  { "supported": false, "verified": false }
 }
 ```
+
+A signal's predicate container is **either** `any_of` (a list — ANY predicate matching satisfies the signal) **or** a `signal` + optional `co_signal` (one **authoritative** predicate, plus a corroborator marked `authoritative:false` that is *never sufficient alone*). Any predicate may carry `since:"trigger"` to require the observation be newer than the trigger, so a re-trigger on the same head can't match a stale prior result.
 
 Observation `type`s (the vocabulary a consumer implements):
 
@@ -150,7 +153,7 @@ Observation `type`s (the vocabulary a consumer implements):
 | `issue_reaction` | a reaction on the PR conversation | mutable, **not** SHA-stamped, and **often transient/live-only → hard to verify from history.** A live `+1` from Codex *does* accompany a clean pass, but as a co-signal to the persistent `comment` — stays `verified:false`; don't depend on it alone |
 | `comment_reaction` | a reaction on a specific comment | same caveat |
 
-`by: "self"` resolves to the reviewer's login + `aliases`. `supported:false`
+`by: "self"` resolves **per surface**: the GraphQL login + `aliases` for `review` / `*_reaction` types, and `identity.rest_login` (e.g. `chatgpt-codex-connector[bot]`) for the REST `comment` surface — match the right login per surface, or a clean issue comment is silently filtered out. `supported:false`
 declares a capability *absent* → triggers degradation (§10). Default
 `supported:true`, `verified:false`.
 
@@ -186,12 +189,12 @@ expressed declaratively, a profile may set an **escape-hatch hook**:
 ```
 
 ```
-<hook> detect-state   <repo> <pr> <head_sha>   -> running|clean|findings|none|unknown
+<hook> detect-state   <repo> <pr> <head_sha> <trigger_iso>   -> running|clean|findings|none|unknown
 <hook> list-findings  <repo> <pr>              -> JSON array of findings
 <hook> react          <comment_id> accept|reject
 <hook> trigger        <repo> <pr>
 ```
-Hooks are **opt-in and security-sensitive** (arbitrary code) → §14.
+`detect-state` also receives `<trigger_iso>` — the trigger baseline a hook needs to honor `since:"trigger"` (else a re-trigger on the same head can return a stale clean/findings result). Hooks are **opt-in and security-sensitive** (arbitrary code) → §14.
 
 ### 6.4 The two reference profiles
 
@@ -523,7 +526,8 @@ Probed closed PRs #8/#9 on `loganrooks/philpapers-mcp` (read-only `gh`):
   feedback channel, below), never a Codex 👀/👍 of its own. So the earlier
   "👀→👍 clean signal" is not reproducible from history; whether it is live-only
   or never existed is **undetermined** — either way the design doesn't depend on
-  it (`running`/`clean` stay unverified).
+  it: only the **reaction-based** clean/running self-signal stays unverified, while
+  `clean` itself IS verified via the issue-comment channel (§6.4; probes #10/#12).
 - **The feedback channel is persistent and verified.** Those 7 👍 / 2 👎 on
   Codex finding (review-thread) comments are the usefulness reactions Codex
   solicits; the action persists and is queryable (fixture in hand) → `feedback`

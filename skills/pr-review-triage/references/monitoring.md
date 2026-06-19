@@ -34,6 +34,10 @@ SHA=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
 SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # set BEFORE you post @codex review; a clean comment must be newer
 DEADLINE=$(( $(date +%s) + 1200 ))     # head may move, or push-event ingestion may drift and post nothing
 
+# Post the pass you are waiting for. Auto-on-push is unreliable, so DO post it
+# (and re-post after each later push you want reviewed):
+gh pr comment "$PR" --repo "$REPO" --body "@codex review"
+
 pass_done() {
   # Codex is SPLIT-CHANNEL. (1) FINDINGS = NEW UNRESOLVED review threads from Codex
   # created after your trigger. (2) a CLEAN pass = a PR ISSUE COMMENT "...find any
@@ -41,11 +45,20 @@ pass_done() {
   # AGENT that posts a "no changes needed" review WITHOUT opening any thread — treat
   # that (a Codex review after the trigger, no new unresolved threads) as converged.
   # Poll all three; mind the [bot] login on REST.
-  local f c r
+  local f c r head_now
+  # Guard: if the head moved while we waited, any pass we detect is for a STALE
+  # SHA (a review/clean comment on a newer or different commit). Bail and re-baseline
+  # — this is the head-tie the findings/clean branches would otherwise miss.
+  head_now=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null)
+  if [ -n "$head_now" ] && [ "$head_now" != "$SHA" ]; then
+    echo "head-moved ($head_now != $SHA) — re-baseline SHA/SINCE and re-post @codex review"; return 0
+  fi
   # (1) FINDINGS = NEW UNRESOLVED review threads authored by Codex, created after the
   #     trigger. Counting a review's inline TOTAL instead misfires: a re-trigger reply
   #     INTO an already-resolved thread (or a cloud-agent confirmation) inflates the
   #     count and falsely reports findings. Gate on thread RESOLUTION, not raw count.
+  #     NB reviewThreads(first:100) bounds at 100 threads; a PR with more would
+  #     need pagination before step (3) concludes "no new threads".
   f=$(gh api graphql -f query='
     query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){
       pullRequest(number:$p){reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login} createdAt}}}}}}}' \
