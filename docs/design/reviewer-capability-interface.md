@@ -600,3 +600,21 @@ the clean-pass channel (a *live* probe refuting both "clean = empty review" and 
 convenient "maybe it posts nothing"). Each correction came from probing the
 unprobed subject rather than trusting the first convenient negative — including, the
 third time, a bug in the verifier itself.
+
+**Live probe — PRJ#8 self-review (2026-06-19, recursive).** This spec was opened as a
+PR and reviewed by Codex — the reviewer it describes. It surfaced **5 real soundness
+gaps** (title→body predicate, clean-not-scoped-to-pass, findings-missing-`submittedAt`,
+clean-poll-pagination, stale §12 verified-gate; all fixed in §6.2/§6.4/§12 + §11). Two
+*further* findings came from the round-trip:
+- **Cloud-agent vs lightweight reviewer — same trigger, different product by repo
+  config.** With a Codex **cloud** env set for the repo, `@codex review` ran as an
+  **agent** posting an agentic "Summary / Testing / no changes needed" review (with a
+  `[View task →]` chatgpt.com link), not the lightweight "💡 Codex Review / Didn't find
+  any major issues" shape seen on philpapers-mcp. A profile must not assume one
+  response shape; the `clean` signal is reviewer-**mode**-specific.
+- **Findings-detector false positive → gate on thread RESOLUTION.** On the re-trigger,
+  the agent replied its confirmation INTO an already-resolved thread; the old detector
+  (sum a review's inline comments on the head SHA) read that as `findings(1)`. Fixed in
+  §11/`monitoring.md`: step (1) now counts **NEW UNRESOLVED** Codex threads created
+  after the trigger; a new step (3) treats "a Codex review after the trigger with no
+  new unresolved thread" as converged (the agent-confirmation case).

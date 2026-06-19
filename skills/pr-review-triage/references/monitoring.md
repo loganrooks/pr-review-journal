@@ -35,19 +35,26 @@ SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # set BEFORE you post @codex review; a cl
 DEADLINE=$(( $(date +%s) + 1200 ))     # head may move, or push-event ingestion may drift and post nothing
 
 pass_done() {
-  # Codex is SPLIT-CHANNEL: findings = a review on the head SHA WITH inline comments;
-  # a CLEAN pass = a PR ISSUE COMMENT "...find any major issues" with NO review object.
-  # Poll BOTH, mind the [bot] login on REST, or a clean pass runs to timeout.
-  local n c
-  # (1) findings channel — GraphQL (bare login), keyed on commit.oid == head SHA.
-  n=$(gh api graphql -f query='
+  # Codex is SPLIT-CHANNEL. (1) FINDINGS = NEW UNRESOLVED review threads from Codex
+  # created after your trigger. (2) a CLEAN pass = a PR ISSUE COMMENT "...find any
+  # major issues" with NO review object. (3) some repos run @codex review as a cloud
+  # AGENT that posts a "no changes needed" review WITHOUT opening any thread — treat
+  # that (a Codex review after the trigger, no new unresolved threads) as converged.
+  # Poll all three; mind the [bot] login on REST.
+  local f c r
+  # (1) FINDINGS = NEW UNRESOLVED review threads authored by Codex, created after the
+  #     trigger. Counting a review's inline TOTAL instead misfires: a re-trigger reply
+  #     INTO an already-resolved thread (or a cloud-agent confirmation) inflates the
+  #     count and falsely reports findings. Gate on thread RESOLUTION, not raw count.
+  f=$(gh api graphql -f query='
     query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){
-      pullRequest(number:$p){reviews(last:30){nodes{author{login} commit{oid} submittedAt comments{totalCount}}}}}}' \
+      pullRequest(number:$p){reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login} createdAt}}}}}}}' \
     -F o="$OWNER" -F n="$NAME" -F p="$PR" \
-    --jq "([.data.repository.pullRequest.reviews.nodes[]
-            | select(.author.login==\"$GQL_BOT\" and .commit.oid==\"$SHA\" and (.submittedAt > \"$SINCE\"))]
-           | (map(.comments.totalCount)|add)) // 0" 2>/dev/null)
-  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then echo "findings($n)"; return 0; fi
+    --jq "[.data.repository.pullRequest.reviewThreads.nodes[]
+           | select(.isResolved | not)
+           | select(.comments.nodes[0].author.login==\"$GQL_BOT\" and (.comments.nodes[0].createdAt > \"$SINCE\"))]
+          | length" 2>/dev/null)
+  if [ "${f:-0}" -gt 0 ] 2>/dev/null; then echo "findings($f)"; return 0; fi
   # (2) clean channel — REST ([bot] login): a clean comment newer than your trigger.
   # ?since= filters server-side to comments updated since the trigger (small set),
   # so the clean comment can't hide past the default 30-per-page window. (Prefer
@@ -58,6 +65,17 @@ pass_done() {
                and (.created_at > \"$SINCE\")
                and (.body | test(\"find any major issues\")))] | length" 2>/dev/null)
   if [ "${c:-0}" -gt 0 ] 2>/dev/null; then echo clean; return 0; fi
+  # (3) cloud-agent CONFIRMATION: a Codex review submitted after the trigger on the
+  #     head SHA, with NO new unresolved thread (step 1 was 0) and no clean comment —
+  #     an agentic "no changes needed" summary. Codex responded; nothing to fix.
+  r=$(gh api graphql -f query='
+    query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){
+      pullRequest(number:$p){reviews(last:10){nodes{author{login} submittedAt commit{oid}}}}}}' \
+    -F o="$OWNER" -F n="$NAME" -F p="$PR" \
+    --jq "[.data.repository.pullRequest.reviews.nodes[]
+           | select(.author.login==\"$GQL_BOT\" and .commit.oid==\"$SHA\" and (.submittedAt > \"$SINCE\"))]
+          | length" 2>/dev/null)
+  if [ "${r:-0}" -gt 0 ] 2>/dev/null; then echo "clean (agent confirmation; no new threads)"; return 0; fi
   return 1
 }
 
