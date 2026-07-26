@@ -9,6 +9,18 @@ each pass fixes sites instead of causes, or introduces the next pass's findings.
 high round count as a defect report against *this skill and your process*, not as evidence
 of diligence.
 
+## What counts as a round
+
+A round is one **fix cycle**, keyed to the head SHA — not one reviewer pass. Every review of the
+same commit belongs to the same round however many reviewers file it. CodeRabbit, Codex and a
+human all reviewing the same head is **round 1**; the round advances when you push a fix batch
+and the reviewers come back at the new SHA.
+
+This matters because the budget below is a claim about a *loop*. Counting reviewer passes on a
+multi-reviewer PR would trip the tripwire on the third opinion about unchanged code, which is
+normal asynchronous review, not a broken loop. If you cannot tell which round you are in, ask
+how many times *you* have pushed in response to findings.
+
 ## The budget
 
 | Round | What it is for | If it carries substantive findings |
@@ -38,14 +50,31 @@ single highest-leverage step in the file.
 | Locus | one site / one module / cross-cutting | Cross-cutting means the fix is upstream of every site |
 | Depth | surface symptom / structural cause | Surface-heavy rounds predict a round N+1 |
 
-**2. Cluster.** If two or more findings share a root cause, they are **one** fix. Fix the
-cause; dispose of the rest as `DUPLICATE` pointing at the primary thread. Resist the pull to
-apply N suggested patches — N patches is N chances to introduce round N+1, and it leaves the
-cause in place to generate more findings later.
+**2. Cluster.** If two or more findings share a root cause, they are **one fix — and still N
+verdicts.** Implement the cause once, then dispose of each finding on its own thread with its
+own verdict, each citing the shared commit. Resist the pull to apply N suggested patches — N
+patches is N chances to introduce round N+1, and it leaves the cause in place to generate more
+findings later.
 
-**3. Ask the dominance question.** If one category is >50% of the round, the PR has a
-systematic gap, and the right fix is usually a single structural change plus a test that
-makes the class impossible — not per-site patches. Say so explicitly in the round summary.
+Clustering is about the *implementation*, never about the bookkeeping. `DUPLICATE` means the
+**same issue reported at two anchor points** (`verdicts.md`); two genuinely distinct defects
+that one change happens to fix are not duplicates, and recording them as such throws away the
+per-finding disposition history the journal exists to hold. If each finding would need its own
+verification to call it closed, each finding gets its own verdict.
+
+**3. Ask the dominance question — if the round is big enough to ask it of.** A proportion needs
+a denominator worth taking a proportion of: on a one-finding round that finding's category is
+trivially 100%, and two-item rounds are barely better given how broad the categories are.
+
+- **Four or more substantive findings:** if one category exceeds ~50%, the PR has a systematic
+  gap, and the right fix is usually a single structural change plus a test that makes the class
+  impossible — not per-site patches. Say so explicitly in the round summary.
+- **Fewer than four:** do not compute the percentage at all. Ask the underlying question
+  directly — *do these findings have one cause?* — and answer it from the findings themselves.
+
+Dominance is a cheap proxy for the shared-cause question on rounds too big to eyeball, not an
+independent test. Both the threshold and the floor are **Conjecture**, like the rest of the
+budget.
 
 ## The surface-symptom test
 
@@ -105,8 +134,19 @@ down-label the claim.
 
 The same shape appears in tests: a test written after a fix, which passes, but whose assertion
 is dominated by an unrelated code path and would pass with the fix reverted. If a test has
-never failed, you have not yet learned anything from it — flip the fix off and watch it fail
-before you trust it.
+never failed, you have not yet learned anything from it — mutation-check it.
+
+Three steps, and the third is not optional:
+
+1. **Flip the fix off** in the working tree — temporarily, and only the fix under test.
+2. **Watch the test fail.** If it still passes, the assertion is not observing your change and
+   the test is worthless; rewrite it before going further.
+3. **Restore the fix and re-run green** on the *exact* tree you are about to commit.
+
+Step 3 is what stops the check from becoming the defect. A procedure that ends at the red run
+leaves the regression reintroduced in the working tree, and the evidence you would cite is a
+deliberately broken state. The claim you are entitled to needs both runs: it failed without the
+fix, and it passes with the fix, on the tree that ships.
 
 ### Loud is not closed
 
@@ -169,6 +209,10 @@ tripwire.
 - The PR's diff grew every round.
 - A verdict cites evidence from a command you ran *before* your most recent edit.
 - A test you wrote for this fix has never been observed to fail.
+- You mutation-checked a test and never re-ran it green on the tree you actually committed.
+- You recorded distinct findings as `DUPLICATE` because one change happened to fix them all.
+- You called a category "dominant" on a round of one or two findings.
+- You counted a second reviewer's opinion on unchanged code as a new round.
 - The fix's mechanism is a log line, a warning or an exit code, and you have not named the
   thing that actually enforces.
 - You wrote "fixed as a class" without listing the consumers you checked.
@@ -231,11 +275,25 @@ Deployed 2026-07-26 as a live dev build (`~/.claude/skills/pr-review-journal-dev
 tree; the pinned `72715c7` install was removed to free the plugin name). Subsequent review cycles
 are the with-guidance arm.
 
-The observable needs no extra instrumentation, because this file already prescribes it: a round
-worked under this guidance leaves a **substantive-finding count** and a **category tabulation** in
-its round summary. Their presence in the PR threads says the file was applied; their absence says
-it was not, however many times `skillUsage` records the skill firing. Baseline at deployment:
-`pr-review-journal:pr-review-triage` had fired 5 times, all against the build without this file.
+Three variables, and they must not be collapsed into one:
+
+| Variable | Measured by | Not measured by |
+|---|---|---|
+| **Exposure** — was the guidance loaded? | The deployed build (`git ls-tree` the pinned SHA) plus `skillUsage` in `~/.claude.json`. Assigns the arm. | Anything the agent wrote |
+| **Adherence** — did the agent follow it? | The round summary carrying a substantive-finding count and a category tabulation | — |
+| **Outcome** — did it help? | Rounds to merge, and self-inflicted findings per round | — |
+
+The tempting shortcut is to read the count-and-tabulation as proof the file was loaded. It is
+not, in either direction: an agent can produce a tabulation without this file, and an exposed
+agent can ignore the file entirely and produce nothing. **Assigning arms by that artifact would
+select only the compliant runs into the treatment arm and dump the non-compliant exposed runs
+into the control**, which builds the effect it claims to measure. Exposure assigns the arm;
+adherence is an observation *within* the arm, and a low-adherence exposed run is a finding about
+the skill, not a control.
+
+Baseline at deployment: `pr-review-journal:pr-review-triage` had fired 5 times, all against a
+build without this file — so every one of them is control-arm by exposure, whatever its summaries
+look like.
 
 `tools/review-journal/` stores per-thread verdicts and reviewers, which is the data needed to
 check whether round count tracks cluster-blindness across repos. That measurement has not
