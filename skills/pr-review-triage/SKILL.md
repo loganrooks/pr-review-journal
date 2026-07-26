@@ -182,6 +182,8 @@ gh api graphql -f query='
 
 Verify with a final GraphQL query that the PR's `unresolvedThreadCount` is zero before merging. A merged PR with unresolved threads is an audit-trail failure even if all the dispositions were correct.
 
+**Zero unresolved is a completeness check, not a correctness check.** It counts replies; it cannot tell whether each verdict landed on the finding it was written for. Batch-resolving a loop that pairs threads to bodies by position will happily report `0 unresolved` with every verdict one row off — and now they are wrong *and* closed. Audit the pairing, not the count: re-query afterwards and print each thread's finding title next to its reply's `finding_category`, then read the rows. Pair by a key you re-derived from the thread itself, never by array position.
+
 ## Multi-reviewer attribution and disagreement
 
 When a repo runs two automated reviewers (the common CR + Codex pattern), their findings are mostly orthogonal — they catch *different* bugs by design. This is signal, not noise.

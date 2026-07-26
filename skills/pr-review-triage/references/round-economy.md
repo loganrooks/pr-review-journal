@@ -206,6 +206,7 @@ tripwire.
 - A round's fixes touched files no finding mentioned, and you didn't say why.
 - You are on round 3+ and have not written down a category tabulation for any round.
 - You resolved a thread whose reply contains no verdict block.
+- You reported `0 unresolved` without reading each thread's finding next to its own verdict.
 - The PR's diff grew every round.
 - A verdict cites evidence from a command you ran *before* your most recent edit.
 - A test you wrote for this fix has never been observed to fail.
