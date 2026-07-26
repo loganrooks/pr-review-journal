@@ -83,6 +83,54 @@ Read your own fix diff as if it arrived from someone else, and answer:
 That last question is the whole exercise. If the answer is yes, fix it now — a round you
 prevent costs one grep; a round you incur costs a full review cycle plus a re-triage.
 
+## Fixes that only look like fixes
+
+Two failure modes that produce a *confident* disposition and a next round anyway. Both are
+cheap to check and neither is caught by re-reading the diff, which is why they get their own
+rule rather than a bullet above.
+
+### A verification that predates the change it covers is not a verification
+
+Running the check, then editing, then reporting the earlier run's result. Nothing about it
+feels like skipping verification — you *did* run it, and it *did* pass. But the command you
+ran is no longer the command your change produces.
+
+> A ruleset JSON was applied successfully against the live API. A documentation key was then
+> added to the same file. The API rejects unknown keys with a 422, so the file could no longer
+> be applied at all — and the "verified" claim came from the run before the key existed.
+
+Before writing a verdict that cites evidence, ask: **was this evidence produced by the current
+state of the change?** If the fix moved after the check, the check is stale. Re-run it, or
+down-label the claim.
+
+The same shape appears in tests: a test written after a fix, which passes, but whose assertion
+is dominated by an unrelated code path and would pass with the fix reverted. If a test has
+never failed, you have not yet learned anything from it — flip the fix off and watch it fail
+before you trust it.
+
+### Loud is not closed
+
+Making a failure *visible* is not the same as making it *not happen*. The fix reports; the
+consequence still lands.
+
+> A gate's rule was "any failure must be loud — exit non-zero." But the merge was blocked by a
+> published status, not by the job's exit code, so a red run informed the operator while the PR
+> stayed green and mergeable. Several fixes written under that rule were weaker than they
+> claimed.
+
+For any fix whose mechanism is reporting — a log line, a warning, a non-zero exit, a
+notification — name the thing that actually enforces, and check that your signal reaches *it*.
+If the enforcing thing never sees the signal, you have improved the diagnostics of an
+unchanged bug. That is worth doing, but it is a different verdict, and saying so is what keeps
+the next round from finding it.
+
+### A note on clustering
+
+Both of these interact with the cluster rule above: a class is not fixed until **every consumer
+of the shared thing** has been checked — not every use inside the file you happened to be
+editing. Two files consuming one shared config list is the common case, and fixing one of them
+while writing "fixed as a class" is how a closed finding reopens two rounds later.
+
 ## At the tripwire (round 3 with substantive findings)
 
 Stop fixing. Write a short note on the PR and pick one:
@@ -119,13 +167,36 @@ tripwire.
 - You are on round 3+ and have not written down a category tabulation for any round.
 - You resolved a thread whose reply contains no verdict block.
 - The PR's diff grew every round.
+- A verdict cites evidence from a command you ran *before* your most recent edit.
+- A test you wrote for this fix has never been observed to fail.
+- The fix's mechanism is a log line, a warning or an exit code, and you have not named the
+  thing that actually enforces.
+- You wrote "fixed as a class" without listing the consumers you checked.
 
 ## Status of this file
 
-**Untested.** Written 2026-07-26 from an operator observation, not from a watched failure.
-The Iron Law in obra/superpowers `writing-skills` is that no skill ships without a failing
-test first; this file does not satisfy it. The predicates above (round budget, dominance
-threshold, the "only instance" question) are **Conjecture** until measured against real PR
-histories. `tools/review-journal/` already stores per-thread verdicts and reviewers, which is
-the data needed to check whether round count actually correlates with cluster-blindness —
-that measurement has not been run.
+Written 2026-07-26 from an operator observation, then exercised the same day against a live
+sequence: **26 findings over 9 review rounds on 3 PRs** in `loganrooks/power-toolkit` (#1–#3),
+reviewed by `chatgpt-codex-connector`.
+
+What that run supports, as **Observed on one corpus** — one repo, one reviewer, one author, so
+treat it as an existence proof rather than a rate:
+
+- Roughly 15 of 26 findings were a **class reported as a single instance**. The
+  surface-symptom question found a sibling every time it was asked, including siblings outside
+  the diff the reviewer could see.
+- Roughly 10 were **self-inflicted** — the previous round's fix authoring the next round's
+  finding. This is the mechanism the budget and the pre-push self-review exist for, and it was
+  the single largest source of rounds.
+- Both rules in *Fixes that only look like fixes* are transcribed from real defects in that
+  run, not invented.
+
+What it does **not** establish: the round budget, the 3-round tripwire and the >50% dominance
+threshold are still **Conjecture** — the run is consistent with them but did not test them, and
+one repo cannot calibrate a threshold. The Iron Law in obra/superpowers `writing-skills` — no
+skill ships without a watched failure first — is still not satisfied: no agent was observed
+failing *without* this file.
+
+`tools/review-journal/` stores per-thread verdicts and reviewers, which is the data needed to
+check whether round count tracks cluster-blindness across repos. That measurement has not
+been run.

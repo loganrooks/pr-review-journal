@@ -50,7 +50,18 @@ Three moves, in order:
 
 Then, before pushing the fix batch: re-read your own diff and ask whether the same reviewer,
 seeing only this, would file something new. The largest single source of round N+1 is round
-N's fix.
+N's fix. Two ways a confident disposition still buys you a round:
+
+- **A verification that predates the change it covers is not a verification.** You ran the
+  check, it passed, then you edited. The command you ran is no longer the command your change
+  produces. Same shape in tests: one that has never been observed to fail has taught you
+  nothing — flip the fix off and watch it fail before trusting it.
+- **Loud is not closed.** A log line, a warning or a non-zero exit makes a failure *visible*,
+  not absent. Name the thing that actually enforces and check your signal reaches it, or
+  you have improved the diagnostics of an unchanged bug — a different verdict, worth saying.
+
+And a class is not fixed until every **consumer of the shared thing** is checked, not every use
+inside the file you were editing.
 
 Substantive = not `REJECTED_FALSE_POSITIVE`, not `OBSOLETE`, not a nit you'd have shipped
 anyway. Write the per-round count in the round summary, so the tripwire cannot be evaded by
