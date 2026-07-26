@@ -193,9 +193,49 @@ treat it as an existence proof rather than a rate:
 
 What it does **not** establish: the round budget, the 3-round tripwire and the >50% dominance
 threshold are still **Conjecture** — the run is consistent with them but did not test them, and
-one repo cannot calibrate a threshold. The Iron Law in obra/superpowers `writing-skills` — no
-skill ships without a watched failure first — is still not satisfied: no agent was observed
-failing *without* this file.
+one repo cannot calibrate a threshold.
+
+### The no-guidance control, and where it came from
+
+`writing-skills` asks for a **no-guidance control** before authoring: watch agents fail without
+the skill, or there is nothing to fix. That control exists, and it was run by accident.
+
+**Measured.** The plugin build installed and loading during the power-toolkit run was pinned at
+`72715c7` (2026-05-25). That commit does not contain this file:
+
+```
+git ls-tree -r --name-only 72715c7 -- skills/pr-review-triage/
+  skills/pr-review-triage/SKILL.md
+  skills/pr-review-triage/references/monitoring.md
+  skills/pr-review-triage/references/verdicts.md
+```
+
+So the agent that ran those 9 rounds had `pr-review-triage` loaded and had **none** of this
+file's guidance from it. The control exhibited the failure the file addresses: ~10 of 26 findings
+were authored by the previous round's fix.
+
+**The contamination, stated plainly.** This is not a clean control. The same agent wrote this
+file partway through the run, so the later rounds had the reasoning in working context even
+though the skill did not carry it. The uncontaminated portion is the rounds that precede
+`5b3efd1`; after that point the run is an author dogfooding their own draft. One repo, one
+reviewer, one author.
+
+**What that leaves.** The RED phase is satisfied in the weak sense that matters — the failure is
+real, observed, and not invented to justify the file. It is *not* satisfied in the strong sense
+`writing-skills` intends: no fresh-context agent was given a multi-round PR with this file
+withheld, so nothing here is a controlled comparison, and no GREEN result exists at all.
+
+### The deployment arm
+
+Deployed 2026-07-26 as a live dev build (`~/.claude/skills/pr-review-journal-dev` → this working
+tree; the pinned `72715c7` install was removed to free the plugin name). Subsequent review cycles
+are the with-guidance arm.
+
+The observable needs no extra instrumentation, because this file already prescribes it: a round
+worked under this guidance leaves a **substantive-finding count** and a **category tabulation** in
+its round summary. Their presence in the PR threads says the file was applied; their absence says
+it was not, however many times `skillUsage` records the skill firing. Baseline at deployment:
+`pr-review-journal:pr-review-triage` had fired 5 times, all against the build without this file.
 
 `tools/review-journal/` stores per-thread verdicts and reviewers, which is the data needed to
 check whether round count tracks cluster-blindness across repos. That measurement has not
