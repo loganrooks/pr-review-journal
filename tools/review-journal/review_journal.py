@@ -61,6 +61,27 @@ VERDICTS_REQUIRE_NOTES = {
     "DUPLICATE",
 }
 
+# Outcome-linkage vocabulary (cross-repo OQ-004). Recorded under each thread's
+# extras["outcome"] by an external audit or downstream consumer — NEVER by the
+# tool itself. The tool records verdicts; it does not adjudicate ground truth.
+# This is the signal the reviewer-quality flywheel needs to tell sycophancy
+# ("agreed to be agreeable") from warranted pushback: accept-rate alone cannot,
+# but what happened *after* the verdict can. See docs/outcome-linkage.md for the
+# capture process and the rationale ported from the AI failure-mode research.
+#
+#   status   — was the verdict borne out by reality, later?
+#                UNKNOWN      no outcome observed yet (same as an absent key)
+#                CONFIRMED    reality confirmed the verdict was right
+#                CONTRADICTED reality showed the verdict was wrong
+#   signal   — what kind of evidence produced the status (optional):
+#                revert       an ACCEPTED fix was later reverted
+#                regression   an ACCEPTED fix was later traced to a regression
+#                reopened     a REJECTED finding was re-raised and then accepted
+#                vindicated   the problem a REJECTED finding predicted occurred
+#                audit        a human ground-truth audit of a sampled verdict
+OUTCOME_STATUSES = {"UNKNOWN", "CONFIRMED", "CONTRADICTED"}
+OUTCOME_SIGNALS = {"revert", "regression", "reopened", "vindicated", "audit"}
+
 VERDICT_BLOCK_FENCE = "review-verdict"
 RECONSIDERED_FENCE = "review-verdict-reconsidered"
 
@@ -1143,6 +1164,34 @@ REQUIRED_THREAD_FIELDS = {
 }
 
 
+def validate_outcome(outcome: Any, prefix: str) -> list[str]:
+    """Shape-check an extras["outcome"] sub-object (cross-repo OQ-004).
+
+    Lenient by design: every field is optional and only a clearly-wrong value
+    errors. An absent outcome (or an absent field within it) means UNKNOWN — we
+    do not require the key, because the tool never writes it and most threads
+    will never carry it. The point of the check is to catch a typo'd `status` or
+    `signal` at validate-time so a hand-edit or a buggy consumer can't silently
+    poison the ground-truth dataset the flywheel will train on.
+    """
+    if not isinstance(outcome, dict):
+        return [f"{prefix}: extras.outcome must be a dict if present"]
+    errs: list[str] = []
+    status = outcome.get("status")
+    if status is not None and status not in OUTCOME_STATUSES:
+        errs.append(
+            f"{prefix}: invalid extras.outcome.status {status!r}. "
+            f"Allowed: {sorted(OUTCOME_STATUSES)}"
+        )
+    signal = outcome.get("signal")
+    if signal is not None and signal not in OUTCOME_SIGNALS:
+        errs.append(
+            f"{prefix}: invalid extras.outcome.signal {signal!r}. "
+            f"Allowed: {sorted(OUTCOME_SIGNALS)} or null"
+        )
+    return errs
+
+
 def validate_journal(payload: dict[str, Any]) -> list[str]:
     """Return a list of validation errors. Empty list ⇒ journal is well-formed."""
     errors: list[str] = []
@@ -1187,6 +1236,11 @@ def validate_journal(payload: dict[str, Any]) -> list[str]:
         extras = t.get("extras")
         if extras is not None and not isinstance(extras, dict):
             errors.append(f"{prefix}: extras must be a dict if present")
+        # extras.outcome shape, if present (cross-repo OQ-004). Fires only when
+        # a consumer/audit has attached the reserved key — a no-op on the vast
+        # majority of records, which carry no outcome.
+        if isinstance(extras, dict) and "outcome" in extras:
+            errors.extend(validate_outcome(extras["outcome"], prefix))
         # verdict_history shape, if present.
         history = t.get("verdict_history")
         if history is not None and not isinstance(history, list):

@@ -280,6 +280,49 @@ into without participating in the sync flow. Use cases:
 The map is preserved across `sync-pr` / `extract-pr` runs; the tool never
 reads or overwrites it. The keys are entirely up to the consumer.
 
+#### Reserved key: `extras.outcome` (ground-truth / outcome-linkage)
+
+One `extras` key is **reserved with a fixed shape**: `outcome`. It records what
+happened to a finding *after* the verdict was issued — the ground-truth signal
+that lets a downstream analysis tell **sycophancy** ("accepted to be agreeable")
+from **warranted pushback** ("rejected because it was a false positive"). Accept-
+rate alone cannot make that distinction; the outcome can.
+
+```json
+"extras": {
+  "outcome": {
+    "status": "CONTRADICTED",
+    "signal": "revert",
+    "ref": "9c1f2ab",
+    "observed_at": "2026-06-10T14:00:00Z",
+    "notes": "Accepted CR fix reverted a week later — it broke relaunch."
+  }
+}
+```
+
+| Field         | Values | Meaning |
+|---------------|--------|---------|
+| `status`      | `UNKNOWN` / `CONFIRMED` / `CONTRADICTED` | Was the verdict borne out by reality, later? Absent ⇒ `UNKNOWN`. |
+| `signal`      | `revert` / `regression` / `reopened` / `vindicated` / `audit` / `null` | What evidence produced the status. |
+| `ref`         | free-form string / `null` | Commit / issue / PR / thread that evidences the outcome. |
+| `observed_at` | ISO-8601 / `null` | When the outcome was observed. |
+| `notes`       | free-form string / `null` | Human note. |
+
+Crossing `status` with the thread's `verdict` is what yields the quality signal
+(e.g. `ACCEPTED*` + `CONTRADICTED/revert` ⇒ a candidate sycophantic acceptance;
+`REJECTED*` + `CONFIRMED` ⇒ warranted pushback). That interpretation is the
+*consumer's* job — the journal only carries the observation.
+
+Like every `extras` key, `outcome` is written by an external audit or consumer,
+**never by the tool** (the tool records verdicts; it does not adjudicate ground
+truth). Unlike other `extras` keys, its shape is checked by `validate` so a
+typo can't silently poison the dataset. The key is *reserved now, on purpose*:
+recording verdicts without ever capturing their outcome is cheap today and
+expensive to backfill later (you'd have to re-investigate every old PR). The
+capture process and the design rationale — including the open question of where
+the analysis *engine* should live — are in
+[`docs/outcome-linkage.md`](../../docs/outcome-linkage.md).
+
 ### `verdict_history` provenance log
 
 Each thread record carries an append-only `verdict_history: []` log capturing
@@ -348,6 +391,8 @@ Validates a journal file against the schema. Checks:
 - `ACCEPTED` / `ACCEPTED_MODIFIED` / `OBSOLETE` entries have a `verdict_commit`.
 - `REJECTED_*` / `DEFERRED` entries have `verdict_notes`.
 - `extras` is a dict if present; `verdict_history` is a list if present.
+- `extras.outcome`, if present, has a valid `status` and `signal` (the reserved
+  outcome-linkage shape; see the `extras` section above).
 
 Exit 0 on success, 1 on schema violation, 2 on argument or I/O error. Designed
 to be safe to run in CI on every push (in addition to `sync-pr.sh`) so
