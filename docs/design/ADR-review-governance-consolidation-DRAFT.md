@@ -13,7 +13,7 @@ The operator has settled three decisions. They are recorded here as decisions, n
 |---|---|---|---|
 | **A — name** | **Do not rename.** `pr-review-journal` keeps its name and remains the ledger. | The ecosystem map defines this repository as the independent verdict ledger and separates it from the controller. Renaming the ledger to advertise an enforcement role would encode the wrong boundary. (`/Users/rookslog/Development/agentic-ecosystem/ECOSYSTEM.md:92-110`) | Only an explicit later operator decision, backed by a consumer inventory, migration plan, and marketplace/URL compatibility check, may reopen the name. |
 | **B — home** | **Split.** `respond` belongs in `pr-review-journal`. `gate-rerequest` and `watch` are per-repository CI infrastructure following the `power-toolkit` bootstrap pattern. They do not belong in this plugin and are not, yet, assigned to `agentic-review-loop`. | The ledger already owns verdict parsing, recording, and discipline. The CI pattern is the only measured implementation that directly enforces reply + reaction + resolution. ARL is still dormant and not installable. (`/Users/rookslog/Development/pr-review-journal/tools/review-journal/review_journal.py:486-515,1260-1388`; `/Users/rookslog/Development/power-toolkit/.github/workflows/review-gate.yml:171-214`; `/Users/rookslog/Development/agentic-review-loop/README.md:1-8`) | Revisit the split if ARL becomes installable, ships an executable controller/watch surface, and has an active consumer that explicitly accepts this ownership; or if the per-repo CI pattern proves insufficient across active repositories. |
-| **C — Sophotron PR #19** | **Strike it.** The hold/merge recommendation is moot. PR #19 merged on 2026-06-30 and its check remains advisory. | The proposed action was aimed at a PR that is no longer open. (`gh pr view 19 -R loganrooks/sophotron`; `/Users/rookslog/Development/sophotron/.github/workflows/ci.yml:78-81`) | No reversal of this decision. A future Sophotron gate change is a new decision against its then-current state. |
+| **C — Sophotron PR #19** | **Strike it.** The hold/merge recommendation is moot. PR #19 merged on 2026-06-30 and its check remains advisory. | The proposed action was aimed at a PR that is no longer open. (`gh pr view 19 -R rookslog/sophotron`; `/Users/rookslog/Development/sophotron/.github/workflows/ci.yml:78-81`) | No reversal of this decision. A future Sophotron gate change is a new decision against its then-current state. |
 
 ## 1. Boundary first: the ledger is not the controller
 
@@ -88,17 +88,25 @@ No implementation may claim that merge-readiness or zero unresolved threads prev
 
 ### MEASURED — available local evidence
 
-`stylewright#32` documents a manual response that required writing hand-rolled GraphQL twice in one session. A later array-indexing mistake sent six verdict blocks to the wrong threads, resolved those wrong threads, and still reported `0 unresolved`. (`docs/design/HANDOFF-counting-model.md:91-100`)
+`pr-review-journal#11` is documented in this repository and supplies both failures.
 
-`pr-review-journal#11` documents a merge on a `0 unresolved` snapshot, followed by a third Codex round landing 5m14s after merge. The local handoff records three rounds and four findings in that late round. (`docs/design/HANDOFF-counting-model.md:115-129`)
+**The disposition pass** paired reply bodies to threads by array position. Because zsh arrays are 1-indexed, index 0 was empty, six verdict blocks landed on the wrong threads, and those threads were auto-resolved — wrong and closed — while the PR reported `0 unresolved`. (`docs/design/HANDOFF-counting-model.md:91-100`)
 
-These are sufficient measured evidence for `respond` and `watch`: response must be keyed by stable thread identity, and monitoring must distinguish “the current snapshot is clear” from “no later review round can still arrive.”
+**The merge** went ahead on a `0 unresolved` snapshot; a third Codex round carrying four findings landed 5m14s later. The handoff records three rounds where the PR's own summary claimed one. (`docs/design/HANDOFF-counting-model.md:115-129`)
 
-### UNCHECKED — stylewright#27
+These are sufficient measured evidence for `respond` and `watch`: response must be keyed by stable thread identity, and monitoring must distinguish “the current snapshot is clear” from “no later review round can still arrive.” Both failures also share a root: a point-in-time count was treated as a completion proof.
 
-The operator reports that two P1 findings were followed 82 seconds later by `@codex review` on the unchanged commit `67737ed`, producing a false clean result over open findings. The local checkout has no durable incident record for that PR, and the remote `loganrooks/stylewright` repository/PR was not accessible through the current GitHub API session. This incident is therefore **not independently verified here** and is not counted as measured evidence. If confirmed later, it is a direct additional example for `gate-rerequest`.
+### UNCHECKED — the two stylewright incidents
 
-The general need does not depend on that unchecked incident: the measured merge-vs-request gap and the two documented stale-snapshot incidents already establish the capability requirements.
+Both are operator reports recorded in the signal ledger. Neither was independently verifiable from this checkout: the local tree holds no incident record for either PR, and the remote `stylewright` repository was not reachable through the GitHub API session that produced this ADR. They are **not counted as measured evidence**.
+
+**stylewright#27** (`obs-20260727T174606-7709d1`) — two P1 findings were followed 82 seconds later by `@codex review` on the unchanged commit `67737ed`, producing a false clean over open findings. If confirmed, a direct additional example for `gate-rerequest`.
+
+**stylewright#32** (`obs-20260728T011220-568891`) — disposing 24 threads required hand-rolled GraphQL written from scratch twice in one session, because the journal ships no mutation subcommand. If confirmed, a direct additional example for `respond`.
+
+Both are held to the same standard deliberately. An earlier revision of this section counted #32 as MEASURED against `HANDOFF-counting-model.md:91-100`, but that range describes the pr-review-journal#11 indexing incident and the handoff document does not mention stylewright at all; the two incidents had been merged into one sentence under one citation. Same evidentiary situation as #27, so the same treatment.
+
+The general need does not depend on either unchecked incident: the measured merge-vs-request gap plus the two locally-documented pr-review-journal#11 failures already establish both capability requirements.
 
 ## 6. Proposed capability profile and ownership
 
@@ -158,7 +166,7 @@ Keep the proposed seven-field JSONL telemetry envelope (`ts`, `component`, `comp
 2. **Consolidating all enforcement into this plugin.** Dropped because the census shows divergent semantics and because the only directly measured three-predicate gate is a repo-local CI workflow. The plugin can provide the ledger-side response capability and shared contracts; per-repo CI owns enforcement for now. (`/Users/rookslog/Development/power-toolkit/.github/workflows/review-gate.yml:171-214`)
 3. **Treating ARL as today's implementation home.** Dropped because ARL is not installable and has no checked-out watch entry point. This is a timing decision, not a rejection of the ecosystem fence. (`/Users/rookslog/Development/agentic-review-loop/README.md:1-8`)
 4. **The three-repository census.** Dropped because the source audit found 12 mechanisms across 10 repositories. The systems are semantically divergent, so “three implementations” understates both the duplication and the integration risk.
-5. **Holding Sophotron PR #19.** Dropped because it merged on 2026-06-30. (`gh pr view 19 -R loganrooks/sophotron`)
+5. **Holding Sophotron PR #19.** Dropped because it merged on 2026-06-30. (`gh pr view 19 -R rookslog/sophotron`)
 
 ## 9. Proposed next steps and non-decisions
 
