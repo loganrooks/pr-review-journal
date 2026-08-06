@@ -74,6 +74,19 @@ N's fix. Two ways a confident disposition still buys you a round:
 And a class is not fixed until every **consumer of the shared thing** is checked, not every use
 inside the file you were editing.
 
+**Round 2 is conditional, and the batch's own verdicts carry the condition.** Auto-review,
+where enabled, fires once at PR open; every later round is summoned by hand (`@codex review`),
+so an unsummoned round 2 is a decision, not a default. Summon it before merging when the fix
+batch contains judgment no reviewer has seen: any `ACCEPTED_MODIFIED` verdict — the reviewer
+never saw the mechanism you chose — or any fix whose diff exceeds the cited finding's scope,
+which every clustered root-cause fix does by construction. Skip it when CI is already the
+confirming round: every verdict `ACCEPTED` near-verbatim and every fix carrying its own oracle
+(a test observed to fail, a check that either runs or doesn't). Rejections and deferrals never
+summon a round on their own — they change no code, and the thread carries the argument. The
+principle behind the mechanics: **merge only a diff some reviewer has seen, or a mechanical
+application of a reviewer's own suggestion with an oracle.** Worked case and the assumption
+this rests on: `references/round-economy.md`.
+
 Substantive = not `REJECTED_FALSE_POSITIVE`, not `OBSOLETE`, not a nit you'd have shipped
 anyway. Write the per-round count in the round summary, so the tripwire cannot be evaded by
 not counting. Full budget table, escalation options at the tripwire, rationalization table,

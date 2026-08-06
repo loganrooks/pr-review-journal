@@ -37,6 +37,42 @@ the round's summary so the tripwire cannot be reached by not looking.
 Nit-only rounds don't count against the budget. Two rounds of real findings then a nit round
 is a healthy PR.
 
+## When round 2 is mandatory, and when it is skippable
+
+The budget table calls round 2 "normal, and expected" — but nothing summons it. Auto-review
+(where the reviewer's integration enables it) fires once at PR open; every later pass needs a
+manual trigger. So the operative question is not "is round 2 allowed" but "who decides to skip
+it", and the answer must not be "nobody, by omission".
+
+**Summon round 2 when the fix batch contains judgment no reviewer has seen:**
+
+- Any verdict in the batch is `ACCEPTED_MODIFIED`. By definition you applied a mechanism the
+  reviewer did not suggest, so the choice itself has zero reviewer coverage.
+- Any fix's diff exceeds the cited finding's scope. Every clustered root-cause fix qualifies
+  by construction — a structural change for N findings is bigger than any single suggestion.
+
+**Skip round 2 when CI is already the confirming round:** every verdict is `ACCEPTED` applied
+near-verbatim, and every fix carries its own oracle — a test observed to fail before the fix,
+a check that either runs or doesn't. Rejections and deferrals never summon a round on their
+own: they change no code, and the thread carries the argument.
+
+The principle the mechanics proxy for: **merge only a diff some reviewer has seen, or a
+mechanical application of a reviewer's own suggestion with an oracle.**
+
+**The assumption this rests on** is that verdict labels are honest — an adjudicator who wants
+to skip round 2 could file a modified fix as `ACCEPTED`. Accepted, because the verdict block
+sits beside the diff on the same thread, so a mislabel is publicly checkable: the same
+auditability bet the journal itself makes. A mislabeled verdict found in a journal audit flips
+this rule to round-2-always.
+
+**Worked case (the omission this section answers).** `rookslog/stylewright` #60, 2026-08-06: a
+design document merged after one codex round in which five of fourteen findings were
+`ACCEPTED_MODIFIED` — the adjudicator chose among attestation, redaction, and sampling
+mechanisms the reviewer had only sketched. No round 2 was summoned, so the artifact's final
+judgment calls were its least-reviewed content. The same repo's #59, all-`ACCEPTED` with
+per-fix oracles, was correctly merged without one — the condition separates the two cases
+where an unconditional rule would not.
+
 ## Before you fix anything — read the shape of the round
 
 Do this once per round, before touching code. It costs one pass over the findings and is the
