@@ -42,7 +42,7 @@ Read the full bodies with:
 
 ```bash
 gh api graphql -f query='
-{ repository(owner:"loganrooks",name:"pr-review-journal"){
+{ repository(owner:"rookslog",name:"pr-review-journal"){
     pullRequest(number:11){ reviewThreads(first:60){nodes{
       id isResolved comments(first:1){nodes{id body}}}}}}}' \
  --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | .comments.nodes[0].body'
