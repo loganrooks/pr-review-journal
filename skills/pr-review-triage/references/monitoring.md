@@ -156,3 +156,15 @@ A reasonable rule of thumb: monitor events are passive (the user sees them next 
 | "Tell me when the PR's mergeable state changes" | Bash `run_in_background` + `until` loop |
 
 The skill's `pr-review-triage` workflow uses Pattern 1 most often: trigger a review, wait for the single completion notification, switch back to triage when it lands.
+
+## Counting reviews in a poll loop
+
+A monitor that counts `gh pr view --json reviews` will report a cleanly-reviewed
+PR as having zero reviews — the Codex connector only creates a review object when
+it has findings. A poll loop gating on "N reviews received" therefore never fires
+on the PRs that passed. Count formal reviews plus `Codex Review:` comments; see
+the *Counting reviews* section in `SKILL.md` for the query.
+
+This is the monitoring instance of the coverage rule above: a filter that only
+matches the finding-something path is silent through the finding-nothing path,
+and silence looks identical to "not reviewed yet".

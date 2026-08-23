@@ -129,6 +129,54 @@ gh api graphql -f query='
 
 Verify with a final GraphQL query that the PR's `unresolvedThreadCount` is zero before merging. A merged PR with unresolved threads is an audit-trail failure even if all the dispositions were correct.
 
+## Counting reviews: a clean pass is invisible to `--json reviews`
+
+**A reviewer that found nothing may leave no review object at all.** The Codex
+connector signals "reviewed, nothing wrong" as a 👍 reaction on the PR body plus
+an issue comment beginning `Codex Review: Didn't find any major issues`. On a
+first round it may replace its initial 👀 with 👍. A formal review object is
+created **only when there are findings to attach**.
+
+So this is wrong, and wrong in the direction that wastes the most time:
+
+```bash
+gh pr view "$PR" --json reviews --jq '[.reviews[]|select(.author.login=="chatgpt-codex-connector")]|length'
+```
+
+It returns `0` for a PR that has been reviewed cleanly, possibly several times.
+A healthy PR then looks unreviewed and stuck, and an orchestrator enforcing a
+"needs N reviews" gate will re-request reviews it already has, or report a
+blocker that does not exist.
+
+Count both surfaces, and match the login as a **pattern** — the comment and
+reaction author is `chatgpt-codex-connector[bot]` while the review author is
+`chatgpt-codex-connector`:
+
+```bash
+formal=$(gh pr view "$PR" --json reviews \
+  --jq '[.reviews[]|select(.author.login|test("codex-connector"))]|length')
+clean=$(gh api "repos/$OWNER/$REPO/issues/$PR/comments" \
+  --jq '[.[]|select((.user.login|test("codex-connector")) and (.body|test("^Codex Review")))]|length')
+echo "reviews: $((formal + clean))"
+```
+
+Reactions are worth checking too when the count still looks wrong:
+
+```bash
+gh api "repos/$OWNER/$REPO/issues/$PR/reactions" --jq '.[]|"\(.content) \(.user.login)"'
+```
+
+**The general rule this is an instance of.** Before reporting that a review has
+not arrived, check the instrument as well as the result. "No review after N
+minutes" is a negative claim inferred from absence of signal, and absence of
+signal is exactly what a mis-scoped query produces. Establish what a *clean*
+result looks like on this reviewer before concluding that nothing came back.
+
+*(Recorded 2026-08-23 after an orchestrator reported a PR unreviewed for 61
+minutes, benchmarked it against sibling PRs that had visible reviews, and ran a
+retitle experiment on the theory that its `chore(deps):` prefix was suppressing
+review. It had two clean reviews the whole time.)*
+
 ## Multi-reviewer attribution and disagreement
 
 When a repo runs two automated reviewers (the common CR + Codex pattern), their findings are mostly orthogonal — they catch *different* bugs by design. This is signal, not noise.
