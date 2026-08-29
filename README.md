@@ -32,7 +32,7 @@ any repo where `gh` is authenticated; no install required.
 
 ```text
 /plugin marketplace add loganrooks/pr-review-journal
-/plugin install pr-review-journal@loganrooks/pr-review-journal
+/plugin install pr-review-journal@pr-review-journal
 ```
 
 This installs both skills into your Claude Code setup. The tool itself

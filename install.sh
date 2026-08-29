@@ -6,7 +6,7 @@
 # Code plugin:
 #
 #   /plugin marketplace add loganrooks/pr-review-journal
-#   /plugin install pr-review-journal@loganrooks/pr-review-journal
+#   /plugin install pr-review-journal@pr-review-journal
 #
 # Usage (run from the consumer repo's root):
 #
@@ -77,5 +77,5 @@ echo "Next steps:"
 echo "  1. Create .review-journal.json at your repo root (see $TARGET/README.md)"
 echo "  2. (Optional) Add skills via Claude Code plugin:"
 echo "       /plugin marketplace add loganrooks/pr-review-journal"
-echo "       /plugin install pr-review-journal@loganrooks/pr-review-journal"
+echo "       /plugin install pr-review-journal@pr-review-journal"
 echo "  3. To upgrade later, re-run this installer with a new VERSION."
